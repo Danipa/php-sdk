@@ -1,0 +1,56 @@
+name: Test and Release PHP SDK
+
+# Packagist auto-updates via GitHub webhook on release events.
+
+on:
+  push:
+    tags: ['php-v*']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ['8.1', '8.2', '8.3']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer
+
+      - name: Generate SDK from OpenAPI spec
+        run: |
+          npm install -g @openapitools/openapi-generator-cli
+          openapi-generator-cli generate -c openapi-generator-config.yml
+          cp src/DanipaWebhook.php generated/lib/
+
+      - name: Install dependencies
+        working-directory: generated
+        run: composer install --prefer-dist --no-progress
+
+      - name: Run tests
+        working-directory: generated
+        run: vendor/bin/phpunit
+
+      - name: Run webhook helper tests
+        run: php test/DanipaWebhookTest.php
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

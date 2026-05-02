@@ -2,81 +2,123 @@
 
 declare(strict_types=1);
 
-/**
- * Standalone test for DanipaWebhook — no PHPUnit dependency.
- * Run: php test/DanipaWebhookTest.php
- */
-
-require_once __DIR__ . '/../src/DanipaWebhook.php';
+namespace Danipa\Sdk\Tests;
 
 use Danipa\Sdk\DanipaWebhook;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
 
-$passed = 0;
-$failed = 0;
+final class DanipaWebhookTest extends TestCase
+{
+    private const SECRET = 'whsec_test_secret_for_unit_tests';
+    private const PAYLOAD = '{"event":"payment.completed","amount":100}';
+    private const FIXTURE_PATH = __DIR__ . '/../../fixtures/webhook-hmac.json';
 
-$SECRET  = 'whsec_test_secret_for_unit_tests';
-$PAYLOAD = '{"event":"payment.completed","amount":100}';
+    public function testValidSignatureAccepted(): void
+    {
+        $ts = time();
+        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, $ts);
+        self::assertTrue(DanipaWebhook::verify(self::PAYLOAD, $sig, (string) $ts, self::SECRET));
+    }
 
-function test(string $name, bool $condition): void {
-    global $passed, $failed;
-    if ($condition) {
-        $passed++;
-        echo "  PASS: $name\n";
-    } else {
-        $failed++;
-        echo "  FAIL: $name\n";
+    public function testInvalidSignatureRejected(): void
+    {
+        $ts = time();
+        self::assertFalse(
+            DanipaWebhook::verify(self::PAYLOAD, 'sha256=0000', (string) $ts, self::SECRET),
+        );
+    }
+
+    public function testExpiredTimestampRejected(): void
+    {
+        $ts = time() - 600;
+        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, $ts);
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, $sig, (string) $ts, self::SECRET));
+    }
+
+    public function testFutureTimestampRejected(): void
+    {
+        $ts = time() + 600;
+        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, $ts);
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, $sig, (string) $ts, self::SECRET));
+    }
+
+    public function testEmptyInputsRejected(): void
+    {
+        self::assertFalse(DanipaWebhook::verify('', 'sig', '123', self::SECRET));
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, '', '123', self::SECRET));
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, 'sig', '', self::SECRET));
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, 'sig', '123', ''));
+    }
+
+    public function testNonNumericTimestampRejected(): void
+    {
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, 'sha256=abc', 'not-a-number', self::SECRET));
+    }
+
+    public function testSignatureFormatIsSha256Hex(): void
+    {
+        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, 1700000000);
+        self::assertMatchesRegularExpression('/^sha256=[0-9a-f]{64}$/', $sig);
+    }
+
+    public function testDifferentTimestampsProduceDifferentSignatures(): void
+    {
+        $a = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, 1700000000);
+        $b = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, 1700000001);
+        self::assertNotSame($a, $b);
+    }
+
+    /**
+     * Cross-SDK fixture parity. Every Danipa SDK (Node, Java, PHP, future
+     * Python / Go) MUST produce the exact `expectedSignature` for each
+     * vector in `sdks/fixtures/webhook-hmac.json`. Drift means a webhook
+     * will validate in one SDK but reject in another — release-blocker.
+     *
+     * @param string $payload
+     * @param string $secret
+     * @param int    $timestamp
+     * @param string $expected
+     */
+    #[DataProvider('crossSdkVectorProvider')]
+    public function testCrossSdkFixtureParity(
+        string $name,
+        string $payload,
+        string $secret,
+        int $timestamp,
+        string $expected,
+    ): void {
+        $actual = DanipaWebhook::computeSignature($payload, $secret, $timestamp);
+        self::assertSame(
+            $expected,
+            $actual,
+            sprintf('Vector "%s" signature mismatch — PHP disagrees with the canonical fixture', $name),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string, string, string, int, string}>
+     */
+    public static function crossSdkVectorProvider(): iterable
+    {
+        $raw = file_get_contents(self::FIXTURE_PATH);
+        if ($raw === false) {
+            throw new \RuntimeException('Could not read fixture: ' . self::FIXTURE_PATH);
+        }
+        $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($decoded) || !isset($decoded['vectors']) || !is_array($decoded['vectors'])) {
+            throw new \RuntimeException('Fixture missing "vectors" array');
+        }
+        foreach ($decoded['vectors'] as $vector) {
+            \assert(\is_array($vector));
+            $name = (string) ($vector['name'] ?? 'unnamed');
+            yield $name => [
+                $name,
+                (string) $vector['payload'],
+                (string) $vector['secret'],
+                (int) $vector['timestamp'],
+                (string) $vector['expectedSignature'],
+            ];
+        }
     }
 }
-
-// Valid signature accepted
-$ts  = time();
-$sig = DanipaWebhook::computeSignature($PAYLOAD, $SECRET, $ts);
-test('valid signature accepted',
-    DanipaWebhook::verify($PAYLOAD, $sig, (string)$ts, $SECRET));
-
-// Invalid signature rejected
-test('invalid signature rejected',
-    !DanipaWebhook::verify($PAYLOAD, 'sha256=0000', (string)$ts, $SECRET));
-
-// Expired timestamp rejected
-$oldTs = time() - 600;
-$oldSig = DanipaWebhook::computeSignature($PAYLOAD, $SECRET, $oldTs);
-test('expired timestamp rejected',
-    !DanipaWebhook::verify($PAYLOAD, $oldSig, (string)$oldTs, $SECRET));
-
-// Future timestamp rejected
-$futureTs = time() + 600;
-$futureSig = DanipaWebhook::computeSignature($PAYLOAD, $SECRET, $futureTs);
-test('future timestamp rejected',
-    !DanipaWebhook::verify($PAYLOAD, $futureSig, (string)$futureTs, $SECRET));
-
-// Empty inputs rejected
-test('empty payload rejected',
-    !DanipaWebhook::verify('', 'sig', '123', $SECRET));
-test('empty signature rejected',
-    !DanipaWebhook::verify($PAYLOAD, '', '123', $SECRET));
-test('empty timestamp rejected',
-    !DanipaWebhook::verify($PAYLOAD, 'sig', '', $SECRET));
-test('empty secret rejected',
-    !DanipaWebhook::verify($PAYLOAD, 'sig', '123', ''));
-
-// Signature format
-$sig2 = DanipaWebhook::computeSignature($PAYLOAD, $SECRET, 1700000000);
-test('signature starts with sha256=',
-    str_starts_with($sig2, 'sha256='));
-test('signature hex is 64 chars',
-    strlen(substr($sig2, 7)) === 64);
-
-// Different timestamps produce different signatures
-$sigA = DanipaWebhook::computeSignature($PAYLOAD, $SECRET, 1700000000);
-$sigB = DanipaWebhook::computeSignature($PAYLOAD, $SECRET, 1700000001);
-test('different timestamps produce different signatures',
-    $sigA !== $sigB);
-
-// Cross-language compatibility — known vector
-$knownSig = DanipaWebhook::computeSignature('{"test":true}', 'whsec_fixed_test_secret', 1700000000);
-test('known vector format', str_starts_with($knownSig, 'sha256='));
-echo "    Known vector: $knownSig\n";
-
-echo "\n=== Results: $passed passed, $failed failed ===\n";
-if ($failed > 0) exit(1);

@@ -20,7 +20,7 @@ final class InvoicesResourceTest extends TestCase
             apiKey: 'dk_test_x',
             baseUrl: 'https://api.sandbox.danipa.com/ms',
             client: $fake,
-            sleeper: static fn (int $ms): null => null,
+            sleeper: static fn (int $ms) => null,
         );
     }
 

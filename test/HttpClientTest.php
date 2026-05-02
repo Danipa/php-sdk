@@ -21,7 +21,7 @@ final class HttpClientTest extends TestCase
             timeoutMs: 5000,
             maxRetries: $maxRetries,
             client: $fake,
-            sleeper: static fn (int $ms): null => null,
+            sleeper: static fn (int $ms) => null,
         );
     }
 

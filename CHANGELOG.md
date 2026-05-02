@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.1.0 — 2026-05-02 (unreleased)
+## 0.1.0 — 2026-05-02
+
+Live on Packagist: https://packagist.org/packages/danipa/sdk
+
 
 Initial release. M1.5 of `DEVELOPER_PORTAL_FEATURE_GAPS`.
 

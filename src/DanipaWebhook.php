@@ -35,7 +35,9 @@ final class DanipaWebhook
     /** Maximum allowed age for a webhook timestamp (5 minutes). */
     public const REPLAY_WINDOW_SECONDS = 300;
 
-    private function __construct() {}
+    private function __construct()
+    {
+    }
 
     /**
      * Verify a webhook signature.

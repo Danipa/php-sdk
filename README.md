@@ -8,7 +8,7 @@ composer require danipa/sdk
 
 Requires PHP 8.1+. Runtime dependencies: [Guzzle 7](https://github.com/guzzle/guzzle) (default transport) and `psr/http-message` / `psr/http-client` / `psr/http-factory`. Bring your own PSR-18 client to swap Guzzle out — see [Pluggable HTTP transport](#pluggable-http-transport).
 
-> **Source of truth:** this package is developed in the `paboagye/danipa-digital-platform` monorepo (private) and published to Packagist via the public mirror `paboagye/danipa-php-sdk` on every `sdk-php-v*` tag — `git subtree split` keeps the mirror's tree in lockstep with `sdks/php/` in the monorepo.
+> **Source of truth:** this package is developed in the `paboagye/danipa-digital-platform` monorepo (private) and published to Packagist via the public mirror `danipa/php-sdk` on every `sdk-php-v*` tag — `git subtree split` keeps the mirror's tree in lockstep with `sdks/php/` in the monorepo.
 
 ## Quick start
 

@@ -5,8 +5,8 @@
     "license": "MIT",
     "homepage": "https://docs.danipa.com",
     "support": {
-        "issues": "https://github.com/paboagye/danipa-php-sdk/issues",
-        "source": "https://github.com/paboagye/danipa-php-sdk"
+        "issues": "https://github.com/danipa/php-sdk/issues",
+        "source": "https://github.com/danipa/php-sdk"
     },
     "keywords": ["danipa", "fintech", "payments", "africa", "momo", "sdk"],
     "require": {

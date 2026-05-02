@@ -14,4 +14,4 @@ Initial release. M1.5 of `DEVELOPER_PORTAL_FEATURE_GAPS`.
 - PSR-18 `ClientInterface` for swappable HTTP transport — Guzzle 7 by default
 - PSR-17 `RequestFactoryInterface` / `StreamFactoryInterface` for swappable factories
 - phpstan level 8 + PSR-12 conformant
-- Published to Packagist via the public mirror `paboagye/danipa-php-sdk` (subtree-split from monorepo on `sdk-php-v*` tags)
+- Published to Packagist via the public mirror `danipa/php-sdk` (subtree-split from monorepo on `sdk-php-v*` tags)

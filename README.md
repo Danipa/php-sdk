@@ -167,7 +167,7 @@ try {
     fwrite(STDERR, sprintf(
         "[%d] %s: %s (correlationId: %s)\n",
         $e->status,
-        $e->code,
+        $e->errorCode,
         $e->getMessage(),
         $e->correlationId ?? '-',
     ));

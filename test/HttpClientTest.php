@@ -68,7 +68,7 @@ final class HttpClientTest extends TestCase
             self::fail('expected DanipaApiError');
         } catch (DanipaApiError $e) {
             self::assertSame(400, $e->status);
-            self::assertSame('VALIDATION', $e->code);
+            self::assertSame('VALIDATION', $e->errorCode);
             self::assertSame('amount required', $e->getMessage());
             self::assertSame('cor_x', $e->correlationId);
         }
@@ -132,7 +132,7 @@ final class HttpClientTest extends TestCase
             self::fail('expected DanipaApiError');
         } catch (DanipaApiError $e) {
             self::assertSame(500, $e->status);
-            self::assertSame('UNKNOWN', $e->code);
+            self::assertSame('UNKNOWN', $e->errorCode);
             self::assertSame('HTTP 500', $e->getMessage());
             self::assertSame('<html>nginx 502</html>', $e->raw);
         }
@@ -196,7 +196,7 @@ final class HttpClientTest extends TestCase
             self::fail('expected DanipaApiError');
         } catch (DanipaApiError $e) {
             self::assertSame(409, $e->status);
-            self::assertSame('UNKNOWN', $e->code);
+            self::assertSame('UNKNOWN', $e->errorCode);
             self::assertSame('HTTP 409', $e->getMessage());
             self::assertSame('cor_y', $e->correlationId);
         }

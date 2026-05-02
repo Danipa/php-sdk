@@ -12,15 +12,17 @@ namespace Danipa\Sdk\Errors;
 final class DanipaApiError extends DanipaError
 {
     /**
-     * @param int                $status        HTTP status code (4xx or 5xx).
-     * @param string             $code          Stable error code from the backend envelope, or `UNKNOWN`.
-     * @param string             $message       Human-readable description.
-     * @param string|null        $correlationId Backend correlation id for log-tracing, when present.
-     * @param array<mixed>|string|null $raw     Parsed error envelope (array) or raw body (string), or null when empty.
+     * @param int                      $status        HTTP status code (4xx or 5xx).
+     * @param string                   $errorCode     Stable error code from the backend envelope, or `UNKNOWN`.
+     *                                                Named `errorCode` to avoid clashing with the inherited
+     *                                                `Exception::$code` (an int the SDK doesn't use).
+     * @param string                   $message       Human-readable description.
+     * @param string|null              $correlationId Backend correlation id for log-tracing, when present.
+     * @param array<mixed>|string|null $raw           Parsed error envelope (array) or raw body (string), or null when empty.
      */
     public function __construct(
         public readonly int $status,
-        public readonly string $code,
+        public readonly string $errorCode,
         string $message,
         public readonly ?string $correlationId,
         public readonly array|string|null $raw,

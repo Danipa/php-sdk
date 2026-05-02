@@ -47,7 +47,7 @@ final class HttpClient
     public function __construct(
         private readonly string $apiKey,
         ?string $baseUrl = null,
-        private readonly int $timeoutMs = self::DEFAULT_TIMEOUT_MS,
+        int $timeoutMs = self::DEFAULT_TIMEOUT_MS,
         private readonly int $maxRetries = self::DEFAULT_MAX_RETRIES,
         ?ClientInterface $client = null,
         ?RequestFactoryInterface $requestFactory = null,

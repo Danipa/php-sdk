@@ -2,201 +2,213 @@
 
 Official PHP SDK for the Danipa payments API.
 
+- Packagist: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk)
+- Source (public mirror): [github.com/Danipa/php-sdk](https://github.com/Danipa/php-sdk)
+- Issues: [github.com/Danipa/php-sdk/issues](https://github.com/Danipa/php-sdk/issues)
+
 ```bash
-composer require danipa/sdk
+composer require danipa/sdk guzzlehttp/guzzle
 ```
 
-Requires PHP 8.1+. Runtime dependencies: [Guzzle 7](https://github.com/guzzle/guzzle) (default transport) and `psr/http-message` / `psr/http-client` / `psr/http-factory`. Bring your own PSR-18 client to swap Guzzle out — see [Pluggable HTTP transport](#pluggable-http-transport).
+Requires **PHP 8.2+**. The SDK talks through any [PSR-18](https://www.php-fig.org/psr/psr-18/) HTTP client and
+[PSR-17](https://www.php-fig.org/psr/psr-17/) factories. It does not ship one: install Guzzle (as above), Symfony
+HttpClient + `nyholm/psr7`, or any other implementation, and the SDK finds it through
+[`php-http/discovery`](https://docs.php-http.org/en/latest/discovery.html). You can also inject one yourself, see
+[HTTP transport and timeouts](#http-transport-and-timeouts).
 
-> **Source of truth:** this package is developed in the `Danipa/danipa-digital-platform` monorepo (private) and published to Packagist via the public mirror `danipa/php-sdk` on every `sdk-php-v*` tag — `git subtree split` keeps the mirror's tree in lockstep with `sdks/php/` in the monorepo.
+> **Source of truth:** this package is developed in the `Danipa/danipa-digital-platform` monorepo (private) and published
+> to Packagist through the public mirror `Danipa/php-sdk` on every `sdk-php-v*` tag. `git subtree split` keeps the mirror's
+> tree in lockstep with `sdks/php/` in the monorepo.
 
 ## Quick start
 
 ```php
 use Danipa\Sdk\Danipa;
-use Danipa\Sdk\RequestOptions;
-use Danipa\Sdk\Model\CreateCollectionRequest;
-use Danipa\Sdk\Model\Payer;
 
-// API key prefix decides sandbox vs production:
+// The API key is sent as the X-API-Key header. Its prefix picks the host:
 //   dk_test_… → https://api.sandbox.danipa.com/ms
-//   dk_live_… → https://api.danipa.com/ms
+//   dk_live_… → https://api.danipa.com/ms   (production is not live yet)
 $danipa = Danipa::builder()
     ->apiKey(getenv('DANIPA_API_KEY'))
     ->build();
 
-$collection = $danipa->collections()->create(
-    new CreateCollectionRequest(
-        amount: '125.00',
-        currency: 'GHS',
-        payer: Payer::phone('+233244112233', 'Ama K.'),
-    ),
-    RequestOptions::withIdempotencyKey('order-1234'),
-);
-
-echo $collection->status->value; // "PENDING"
+$merchant = $danipa->merchants()->me();
+echo $merchant->businessName, ' bills in ', $merchant->billingCurrency, PHP_EOL;
 ```
 
 ## Resources
 
-| Resource | Methods |
-|---|---|
-| `$danipa->collections()` | `create`, `get` |
-| `$danipa->disbursements()` | `create`, `get` |
-| `$danipa->wallets()` | `getBalance`, `getBalance($currency)` |
-| `$danipa->paymentLinks()` | `create` |
-| `$danipa->invoices()` | `create` |
-| `Danipa\Sdk\DanipaWebhook` | `verify`, `computeSignature` (static) |
+| Call | Route | Available to an API key today? |
+|---|---|---|
+| `$danipa->merchants()->me()` | `GET /v1/merchants/me` | **Yes**, needs the key's `account:read` scope |
+| `$danipa->paymentLinks()->create($req)` | `POST /v1/merchants/me/payment-links` | Not yet: `403 API_KEY_SCOPE_DENIED` until the API-key surface (#5573) ships |
+| `$danipa->invoices()->create($req)` | `POST /v1/merchants/me/invoices` | Not yet: `403 API_KEY_SCOPE_DENIED` until #5573 ships |
+| `Danipa\Sdk\DanipaWebhook` | (static) `verify`, `constructEvent`, `computeSignature` | n/a |
+
+Only `GET /v1/merchants/me` accepts an API key on the server today. The payment-link and invoice models already match the
+server DTOs, so they will work as soon as the API-key surface ships. Until then they raise
+`Danipa\Sdk\Errors\PermissionError` with `errorCode === 'API_KEY_SCOPE_DENIED'`.
+
+### Payment links
+
+```php
+use Danipa\Sdk\Model\CreatePaymentLinkRequest;
+
+$link = $danipa->paymentLinks()->create(new CreatePaymentLinkRequest(
+    title: 'Flat white',
+    amount: '12.50',            // money as a decimal string; omit currency to use the merchant's billing currency
+    redirectUrl: 'https://shop.example/thanks',
+));
+echo $link->url, ' ', $link->amount, ' ', $link->status->value;
+```
+
+Open-amount links: `isAmountFixed: false, minAmount: '5', maxAmount: '500'`.
+
+### Invoices
+
+```php
+use Danipa\Sdk\Model\CreateInvoiceRequest;
+use Danipa\Sdk\Model\InvoiceLineItemRequest;
+use Danipa\Sdk\Model\InvoiceStatus;
+
+$invoice = $danipa->invoices()->create(new CreateInvoiceRequest(
+    customerName: 'Ama K.',
+    lineItems: [new InvoiceLineItemRequest('Consulting', 2, '250.00', taxRatePct: '13')],
+    customerEmail: 'ama@example.com',
+    dueDate: '2026-11-01',
+));
+
+if ($invoice->status === InvoiceStatus::UNKNOWN) {
+    // The server sent a status this SDK version doesn't know yet; it is kept in $invoice->statusRaw.
+}
+```
+
+`InvoiceStatus` is `DRAFT`, `SENT`, `PAID`, `OVERDUE`, `VOIDED`, or `UNKNOWN` for any value added on the server later.
+`PaymentLinkStatus` works the same way. An unknown value never throws.
+
+### Money
+
+The server writes money as a JSON **number** (`125.00`). The SDK reads it as the exact decimal **string** the server sent
+(`"125.00"`), never as a float, so trailing zeros and precision survive. Pass money in as a string (preferred); ints and
+floats are accepted and converted to strings.
 
 ## Idempotency
 
-Pass an idempotency key on every mutating call via `RequestOptions::withIdempotencyKey(...)`. The backend dedupes on `(merchantId, key)` for 24 hours, so retrying a failed request with the same key is safe.
+Every `POST` / `PUT` / `PATCH` / `DELETE` carries an `Idempotency-Key` header. If you don't pass one, the SDK generates a
+UUIDv4 and reuses **the same key for every retry of that call**, so a retry can never charge twice. To make a call
+idempotent across processes or restarts, pass your own key (255 characters at most; longer keys are rejected before
+anything is sent):
 
 ```php
-use Danipa\Sdk\Model\CreateDisbursementRequest;
-use Danipa\Sdk\Model\Recipient;
+use Danipa\Sdk\RequestOptions;
 
-$danipa->disbursements()->create(
-    new CreateDisbursementRequest(
-        amount: '500.00',
-        currency: 'GHS',
-        recipient: Recipient::phone('+233244998877', 'Kojo'),
-    ),
-    RequestOptions::withIdempotencyKey('payout-' . $order->id),
-);
+$link = $danipa->paymentLinks()->create($req, RequestOptions::withIdempotencyKey('order-' . $order->id));
+
+$link->meta->idempotencyKey;    // the key that was sent (yours, or the generated one)
+$link->meta->idempotentReplay;  // true when the server replayed a cached result (X-Idempotent-Replay: true)
+$link->meta->requestId;         // X-Correlation-Id / X-Request-Id, for support tickets
 ```
 
-The header is sent on `POST` requests only — `GET` calls ignore the option, matching Node + Java.
+The same key and replay flag are on every error, as `$e->idempotencyKey` and `$e->idempotentReplay`.
 
-## Retry & timeout
+## Retries
 
-- Auto-retries 5xx and network errors. Default 3 attempts with exponential backoff (200 ms → 400 ms → 800 ms, capped at 2 s, +0–50 ms jitter).
-- 4xx never retries — fix the request and re-call.
-- 30 s per-request timeout. Override via the builder.
+- Retried: connection failures and HTTP **408, 429, 502, 503, 504**.
+- Never retried: **500, 501**, any other 4xx, and any 2xx.
+- Reads are always safe to retry. Writes are safe because they always carry an idempotency key.
+- A `Retry-After` header (seconds) is honoured, capped at 60 s. Otherwise the SDK uses exponential backoff with full
+  jitter: a random delay in `[0, min(8 s, 500 ms × 2^n)]`.
+- `maxRetries` is the number of **retries** after the first attempt. The default is 2, and `0` disables retrying.
 
 ```php
-$danipa = Danipa::builder()
-    ->apiKey(getenv('DANIPA_API_KEY'))
-    ->maxRetries(5)
-    ->timeoutMs(60000)
-    ->build();
+$danipa = Danipa::builder()->apiKey($key)->maxRetries(4)->build();
 ```
-
-## Verifying webhooks
-
-The verifier is namespaced as `Danipa\Sdk\DanipaWebhook` and works in plain PHP, Symfony, Laravel, or any framework that exposes the raw request body and headers.
-
-### Plain PHP
-
-```php
-use Danipa\Sdk\DanipaWebhook;
-
-$payload   = file_get_contents('php://input');
-$signature = $_SERVER['HTTP_X_DANIPA_SIGNATURE'] ?? '';
-$timestamp = $_SERVER['HTTP_X_DANIPA_TIMESTAMP'] ?? '';
-$secret    = getenv('DANIPA_WEBHOOK_SECRET');
-
-if (!DanipaWebhook::verify($payload, $signature, $timestamp, $secret)) {
-    http_response_code(401);
-    echo json_encode(['error' => 'Invalid signature']);
-    exit;
-}
-
-$event = json_decode($payload, true);
-// … dispatch event …
-http_response_code(200);
-```
-
-### Symfony
-
-```php
-use Danipa\Sdk\DanipaWebhook;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Routing\Attribute\Route;
-
-#[Route('/webhooks/danipa', methods: ['POST'])]
-public function __invoke(Request $request): Response
-{
-    $ok = DanipaWebhook::verify(
-        $request->getContent(),
-        $request->headers->get('X-Danipa-Signature', ''),
-        $request->headers->get('X-Danipa-Timestamp', ''),
-        $_ENV['DANIPA_WEBHOOK_SECRET'],
-    );
-    if (!$ok) {
-        return new Response('', 401);
-    }
-    // … decode + dispatch …
-    return new Response('', 200);
-}
-```
-
-### Laravel
-
-```php
-use Danipa\Sdk\DanipaWebhook;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Route;
-
-Route::post('/webhooks/danipa', function (Request $request) {
-    $ok = DanipaWebhook::verify(
-        $request->getContent(),                            // raw body — NOT $request->all()
-        $request->header('X-Danipa-Signature', ''),
-        $request->header('X-Danipa-Timestamp', ''),
-        env('DANIPA_WEBHOOK_SECRET'),
-    );
-    abort_if(!$ok, 401);
-    // … dispatch …
-    return response()->noContent();
-});
-```
-
-The 5-minute replay window is enforced server-side. Always pass the **raw request body** — re-serializing through `json_encode(json_decode(...))` rewrites the bytes and breaks the signature.
 
 ## Error handling
+
+Every exception extends `Danipa\Sdk\Errors\DanipaError` (a `RuntimeException`).
+
+| Class | When |
+|---|---|
+| `AuthenticationError` | 401, e.g. `INVALID_API_KEY` |
+| `PermissionError` | 403, e.g. `API_KEY_SCOPE_DENIED`, `IP_NOT_ALLOWED`, `AMBIGUOUS_CREDENTIALS` |
+| `NotFoundError` | 404 |
+| `ConflictError` | 409, e.g. `IDEMPOTENCY_KEY_COLLISION` |
+| `ValidationError` | 400 / 422; field problems are in `$e->fieldErrors` |
+| `RateLimitError` | 429 after retries; `$e->retryAfter()` gives seconds |
+| `ServerError` | 5xx |
+| `DanipaApiError` | the base of all the above, and what any other status (e.g. 402 `BILLING_SUSPENDED`) raises |
+| `ConnectionError` / `TimeoutError` | no response (both extend `DanipaNetworkError`) |
+| `ResponseParseError` | a **2xx** whose body could not be parsed. The call probably **succeeded**, so do not retry it blindly; reuse `$e->idempotencyKey` if you must |
+
+Every `DanipaApiError` carries `status`, `errorCode`, `getMessage()`, `requestId`, `raw` (the body), and, when the server
+sent them, `fieldErrors`, `retryable`, `retryAfterSeconds`, `traceId`, `correlationId` and `messageKey`. The SDK parses
+both server error shapes: the `ApiStatus` envelope and the flat `{code, description}` that the security and rate-limit
+filters return.
 
 ```php
 use Danipa\Sdk\Errors\DanipaApiError;
 use Danipa\Sdk\Errors\DanipaNetworkError;
+use Danipa\Sdk\Errors\PermissionError;
 
 try {
-    $danipa->collections()->create($req);
+    $danipa->merchants()->me();
+} catch (PermissionError $e) {
+    error_log("forbidden: {$e->errorCode} (request {$e->requestId})");
 } catch (DanipaApiError $e) {
-    // Backend rejected the request — 4xx or exhausted-retry 5xx.
-    fwrite(STDERR, sprintf(
-        "[%d] %s: %s (correlationId: %s)\n",
-        $e->status,
-        $e->errorCode,
-        $e->getMessage(),
-        $e->correlationId ?? '-',
-    ));
+    error_log(sprintf('[%d] %s: %s', $e->status, $e->errorCode, $e->getMessage()));
 } catch (DanipaNetworkError $e) {
-    // Never reached the backend (DNS, TLS, timeout, connection reset).
-    fwrite(STDERR, 'Network failure: ' . ($e->getPrevious()?->getMessage() ?? $e->getMessage()) . "\n");
+    error_log('network: ' . $e->getMessage());
 }
 ```
 
-Both classes extend `Danipa\Sdk\Errors\DanipaError`, which itself extends `RuntimeException` — catch the base to handle anything from the SDK.
+## Verifying webhooks
 
-## Pluggable HTTP transport
-
-The default transport is Guzzle 7. Pass any [PSR-18](https://www.php-fig.org/psr/psr-18/) `ClientInterface` to swap it — useful when your app already runs Symfony HttpClient, Buzz, or a managed Guzzle pool with custom middleware:
+Each delivery carries `X-Danipa-Signature: sha256=<hex>`, `X-Danipa-Timestamp`, `X-Danipa-Event` and
+`X-Danipa-Delivery`. `constructEvent` verifies the signature and the timestamp (default tolerance 300 s), then returns a
+typed `WebhookEvent`. If anything is wrong it throws `WebhookVerificationError`. Always pass the **raw request body**.
+Re-encoding decoded JSON changes the bytes and breaks the signature.
 
 ```php
-use Symfony\Component\HttpClient\Psr18Client;
+use Danipa\Sdk\DanipaWebhook;
+use Danipa\Sdk\Errors\WebhookVerificationError;
 
+try {
+    $event = DanipaWebhook::constructEvent(
+        file_get_contents('php://input'),   // raw bytes (a PSR-7 StreamInterface works too)
+        getallheaders(),                    // or a PSR-7 request, Symfony/Laravel $request->headers->all(), or $_SERVER
+        [getenv('DANIPA_WEBHOOK_SECRET'), getenv('DANIPA_WEBHOOK_SECRET_PREVIOUS')], // several secrets while rotating
+    );
+} catch (WebhookVerificationError $e) {
+    http_response_code(400);
+    exit;
+}
+
+// $event->type ('payment.completed', ...), $event->deliveryId (dedupe on it), $event->data (decoded body)
+http_response_code(200);
+```
+
+Laravel and Symfony: `DanipaWebhook::constructEvent($request->getContent(), $request->headers->all(), $secrets)`.
+
+For a boolean check, use `DanipaWebhook::verify($payload, $signature, $timestamp, $secretOrSecrets, $toleranceSeconds)`.
+The signing algorithm is fixed by a cross-SDK fixture (`test/fixtures/webhook-hmac.json`), which the Node, Python and Java
+SDKs also pass.
+
+## HTTP transport and timeouts
+
+```php
 $danipa = Danipa::builder()
     ->apiKey(getenv('DANIPA_API_KEY'))
-    ->transport(new Psr18Client())
+    ->transport(new \GuzzleHttp\Client(['timeout' => 30, 'connect_timeout' => 10]))
     ->build();
 ```
 
-Optional PSR-17 factories (`requestFactory`, `streamFactory`) can be injected the same way; both default to Guzzle's `HttpFactory`.
-
-## Event reference
-
-Full webhook event catalog with payload schemas: [developer.sandbox.danipa.com/webhooks/events](https://developer.sandbox.danipa.com/webhooks/events).
+- `transport()` takes any PSR-18 client. `requestFactory()` and `streamFactory()` take PSR-17 factories. Whatever you
+  inject is used as-is, and whatever you leave out is discovered.
+- **Timeouts belong to the client.** The SDK cannot set a timeout on an arbitrary PSR-18 client, so configure it where
+  you build the client, as above. A timed-out call surfaces as `TimeoutError`.
+- The SDK sends `User-Agent: danipa-php/<installed version> php/<PHP version>`. The version is read from Composer's
+  installed-package metadata, not hard-coded.
 
 ## License
 

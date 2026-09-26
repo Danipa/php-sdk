@@ -5,42 +5,104 @@ declare(strict_types=1);
 namespace Danipa\Sdk\Tests;
 
 use Danipa\Sdk\DanipaWebhook;
+use Danipa\Sdk\Errors\WebhookVerificationError;
+use GuzzleHttp\Psr7\ServerRequest;
+use GuzzleHttp\Psr7\Utils;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class DanipaWebhookTest extends TestCase
 {
     private const SECRET = 'whsec_test_secret_for_unit_tests';
-    private const PAYLOAD = '{"event":"payment.completed","amount":100}';
-    private const FIXTURE_PATH = __DIR__ . '/../../fixtures/webhook-hmac.json';
+    private const OLD_SECRET = 'whsec_previous_secret';
+    private const PAYLOAD = '{"event":"payment.completed","amount":100.50}';
+    private const NOW = 1_800_000_000;
+    /** Vendored copy of sdks/fixtures/webhook-hmac.json (CI checks it for drift). */
+    private const FIXTURE_PATH = __DIR__ . '/fixtures/webhook-hmac.json';
+
+    private static function sig(string $payload = self::PAYLOAD, string $secret = self::SECRET, int $ts = self::NOW): string
+    {
+        return DanipaWebhook::computeSignature($payload, $secret, $ts);
+    }
+
+    // ---- verify ----------------------------------------------------------
 
     public function testValidSignatureAccepted(): void
     {
+        self::assertTrue(DanipaWebhook::verify(self::PAYLOAD, self::sig(), (string) self::NOW, self::SECRET, now: self::NOW));
+    }
+
+    public function testValidSignatureAcceptedAgainstTheRealClock(): void
+    {
         $ts = time();
-        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, $ts);
-        self::assertTrue(DanipaWebhook::verify(self::PAYLOAD, $sig, (string) $ts, self::SECRET));
+        self::assertTrue(DanipaWebhook::verify(self::PAYLOAD, self::sig(ts: $ts), (string) $ts, self::SECRET));
+    }
+
+    public function testTamperedPayloadRejected(): void
+    {
+        self::assertFalse(DanipaWebhook::verify(
+            str_replace('100.50', '999.50', self::PAYLOAD),
+            self::sig(),
+            (string) self::NOW,
+            self::SECRET,
+            now: self::NOW,
+        ));
     }
 
     public function testInvalidSignatureRejected(): void
     {
-        $ts = time();
-        self::assertFalse(
-            DanipaWebhook::verify(self::PAYLOAD, 'sha256=0000', (string) $ts, self::SECRET),
-        );
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, 'sha256=0000', (string) self::NOW, self::SECRET, now: self::NOW));
     }
 
-    public function testExpiredTimestampRejected(): void
+    public function testRawBytesStreamIsAccepted(): void
     {
-        $ts = time() - 600;
-        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, $ts);
-        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, $sig, (string) $ts, self::SECRET));
+        $stream = Utils::streamFor(self::PAYLOAD);
+        $stream->read(5); // a framework may already have read part of it
+        self::assertTrue(DanipaWebhook::verify($stream, self::sig(), (string) self::NOW, self::SECRET, now: self::NOW));
     }
 
-    public function testFutureTimestampRejected(): void
+    public function testNonUtf8BytesVerify(): void
     {
-        $ts = time() + 600;
-        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, $ts);
-        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, $sig, (string) $ts, self::SECRET));
+        $bytes = "{\"b\":\"\xff\xfe\x00\"}";
+        self::assertTrue(DanipaWebhook::verify($bytes, self::sig($bytes), (string) self::NOW, self::SECRET, now: self::NOW));
+    }
+
+    public function testDefaultToleranceIsFiveMinutes(): void
+    {
+        $old = self::NOW - 300;
+        self::assertTrue(DanipaWebhook::verify(self::PAYLOAD, self::sig(ts: $old), (string) $old, self::SECRET, now: self::NOW));
+        $older = self::NOW - 301;
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, self::sig(ts: $older), (string) $older, self::SECRET, now: self::NOW));
+        $future = self::NOW + 301;
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, self::sig(ts: $future), (string) $future, self::SECRET, now: self::NOW));
+    }
+
+    public function testToleranceIsConfigurable(): void
+    {
+        $ts = self::NOW - 600;
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, self::sig(ts: $ts), (string) $ts, self::SECRET, now: self::NOW));
+        self::assertTrue(DanipaWebhook::verify(self::PAYLOAD, self::sig(ts: $ts), (string) $ts, self::SECRET, 900, self::NOW));
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, self::sig(ts: self::NOW - 20), (string) (self::NOW - 20), self::SECRET, 10, self::NOW));
+    }
+
+    public function testNegativeToleranceRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        DanipaWebhook::verify(self::PAYLOAD, self::sig(), (string) self::NOW, self::SECRET, -1, self::NOW);
+    }
+
+    public function testSecretRotationAcceptsAnyListedSecret(): void
+    {
+        $signedWithOld = self::sig(secret: self::OLD_SECRET);
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, $signedWithOld, (string) self::NOW, self::SECRET, now: self::NOW));
+        self::assertTrue(DanipaWebhook::verify(
+            self::PAYLOAD,
+            $signedWithOld,
+            (string) self::NOW,
+            [self::SECRET, self::OLD_SECRET],
+            now: self::NOW,
+        ));
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, $signedWithOld, (string) self::NOW, [], now: self::NOW));
     }
 
     public function testEmptyInputsRejected(): void
@@ -51,54 +113,142 @@ final class DanipaWebhookTest extends TestCase
         self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, 'sig', '123', ''));
     }
 
+    public function testFalsyButNonEmptyPayloadIsVerifiedNotRejected(): void
+    {
+        // empty('0') is true — the old check silently rejected a valid "0" body.
+        self::assertTrue(DanipaWebhook::verify('0', self::sig('0'), (string) self::NOW, self::SECRET, now: self::NOW));
+    }
+
     public function testNonNumericTimestampRejected(): void
     {
-        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, 'sha256=abc', 'not-a-number', self::SECRET));
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, self::sig(), 'not-a-number', self::SECRET, now: self::NOW));
+        self::assertFalse(DanipaWebhook::verify(self::PAYLOAD, self::sig(), '-5', self::SECRET, now: self::NOW));
     }
 
     public function testSignatureFormatIsSha256Hex(): void
     {
-        $sig = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, 1700000000);
-        self::assertMatchesRegularExpression('/^sha256=[0-9a-f]{64}$/', $sig);
+        self::assertMatchesRegularExpression('/^sha256=[0-9a-f]{64}$/', self::sig());
+        self::assertNotSame(self::sig(ts: 1700000000), self::sig(ts: 1700000001));
     }
 
-    public function testDifferentTimestampsProduceDifferentSignatures(): void
+    // ---- constructEvent --------------------------------------------------
+
+    /** @return array<string, string> */
+    private static function headers(?string $sig = null): array
     {
-        $a = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, 1700000000);
-        $b = DanipaWebhook::computeSignature(self::PAYLOAD, self::SECRET, 1700000001);
-        self::assertNotSame($a, $b);
+        return [
+            'X-Danipa-Signature' => $sig ?? self::sig(),
+            'X-Danipa-Timestamp' => (string) self::NOW,
+            'X-Danipa-Event' => 'payment.completed',
+            'X-Danipa-Delivery' => 'd-42',
+        ];
     }
+
+    public function testConstructEventReturnsATypedEvent(): void
+    {
+        $event = DanipaWebhook::constructEvent(self::PAYLOAD, self::headers(), self::SECRET, now: self::NOW);
+
+        self::assertSame('payment.completed', $event->type);
+        self::assertSame('d-42', $event->deliveryId);
+        self::assertSame(self::NOW, $event->timestamp);
+        self::assertSame(['event' => 'payment.completed', 'amount' => '100.50'], $event->data, 'money parsed exactly');
+        self::assertSame(self::PAYLOAD, $event->payload);
+    }
+
+    public function testConstructEventHeaderLookupIsCaseInsensitiveAndAcceptsLists(): void
+    {
+        $h = self::headers();
+        $symfonyStyle = [];
+        foreach ($h as $k => $v) {
+            $symfonyStyle[strtolower($k)] = [$v];
+        }
+        $event = DanipaWebhook::constructEvent(self::PAYLOAD, $symfonyStyle, self::SECRET, now: self::NOW);
+        self::assertSame('d-42', $event->deliveryId);
+    }
+
+    public function testConstructEventTreatsAnEmptyHeaderListAsMissing(): void
+    {
+        $h = self::headers();
+        $h['X-Danipa-Delivery'] = [];
+        $this->expectException(WebhookVerificationError::class);
+        $this->expectExceptionMessage('X-Danipa-Delivery');
+        DanipaWebhook::constructEvent(self::PAYLOAD, $h, self::SECRET, now: self::NOW);
+    }
+
+    public function testConstructEventAcceptsServerSuperglobalStyle(): void
+    {
+        $server = [];
+        foreach (self::headers() as $k => $v) {
+            $server['HTTP_' . strtoupper(str_replace('-', '_', $k))] = $v;
+        }
+        $event = DanipaWebhook::constructEvent(self::PAYLOAD, $server, self::SECRET, now: self::NOW);
+        self::assertSame('payment.completed', $event->type);
+    }
+
+    public function testConstructEventAcceptsAPsr7Request(): void
+    {
+        $request = new ServerRequest('POST', '/webhooks/danipa', self::headers(), self::PAYLOAD);
+        $event = DanipaWebhook::constructEvent($request->getBody(), $request, [self::OLD_SECRET, self::SECRET], now: self::NOW);
+        self::assertSame('d-42', $event->deliveryId);
+    }
+
+    public function testConstructEventRejectsABadSignature(): void
+    {
+        $this->expectException(WebhookVerificationError::class);
+        DanipaWebhook::constructEvent(self::PAYLOAD, self::headers('sha256=' . str_repeat('0', 64)), self::SECRET, now: self::NOW);
+    }
+
+    public function testConstructEventRejectsAStaleDelivery(): void
+    {
+        $this->expectException(WebhookVerificationError::class);
+        DanipaWebhook::constructEvent(self::PAYLOAD, self::headers(), self::SECRET, now: self::NOW + 301);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function requiredHeaders(): iterable
+    {
+        foreach (['X-Danipa-Signature', 'X-Danipa-Timestamp', 'X-Danipa-Event', 'X-Danipa-Delivery'] as $h) {
+            yield $h => [$h];
+        }
+    }
+
+    #[DataProvider('requiredHeaders')]
+    public function testConstructEventRequiresHeader(string $header): void
+    {
+        $h = self::headers();
+        unset($h[$header]);
+        $this->expectException(WebhookVerificationError::class);
+        $this->expectExceptionMessage($header);
+        DanipaWebhook::constructEvent(self::PAYLOAD, $h, self::SECRET, now: self::NOW);
+    }
+
+    public function testConstructEventRejectsANonObjectBody(): void
+    {
+        $this->expectException(WebhookVerificationError::class);
+        DanipaWebhook::constructEvent('[1]', self::headers(self::sig('[1]')), self::SECRET, now: self::NOW);
+    }
+
+    // ---- cross-SDK fixture ------------------------------------------------
 
     /**
-     * Cross-SDK fixture parity. Every Danipa SDK (Node, Java, PHP, future
-     * Python / Go) MUST produce the exact `expectedSignature` for each
-     * vector in `sdks/fixtures/webhook-hmac.json`. Drift means a webhook
-     * will validate in one SDK but reject in another — release-blocker.
-     *
-     * @param string $payload
-     * @param string $secret
-     * @param int    $timestamp
-     * @param string $expected
+     * Every Danipa SDK MUST produce the exact `expectedSignature` for each
+     * vector in the shared fixture. Drift means a webhook validates in one
+     * SDK and fails in another — a release blocker.
      */
     #[DataProvider('crossSdkVectorProvider')]
-    public function testCrossSdkFixtureParity(
-        string $name,
-        string $payload,
-        string $secret,
-        int $timestamp,
-        string $expected,
-    ): void {
-        $actual = DanipaWebhook::computeSignature($payload, $secret, $timestamp);
+    public function testCrossSdkFixtureParity(string $name, string $payload, string $secret, int $timestamp, string $expected): void
+    {
         self::assertSame(
             $expected,
-            $actual,
-            sprintf('Vector "%s" signature mismatch — PHP disagrees with the canonical fixture', $name),
+            DanipaWebhook::computeSignature($payload, $secret, $timestamp),
+            sprintf('Vector "%s" signature mismatch', $name),
         );
+        if ($payload !== '') {
+            self::assertTrue(DanipaWebhook::verify($payload, $expected, (string) $timestamp, $secret, now: $timestamp));
+        }
     }
 
-    /**
-     * @return iterable<string, array{string, string, string, int, string}>
-     */
+    /** @return iterable<string, array{string, string, string, int, string}> */
     public static function crossSdkVectorProvider(): iterable
     {
         $raw = file_get_contents(self::FIXTURE_PATH);
@@ -106,18 +256,26 @@ final class DanipaWebhookTest extends TestCase
             throw new \RuntimeException('Could not read fixture: ' . self::FIXTURE_PATH);
         }
         $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-        if (!is_array($decoded) || !isset($decoded['vectors']) || !is_array($decoded['vectors'])) {
+        if (!\is_array($decoded) || !isset($decoded['vectors']) || !\is_array($decoded['vectors'])) {
             throw new \RuntimeException('Fixture missing "vectors" array');
         }
         foreach ($decoded['vectors'] as $vector) {
-            \assert(\is_array($vector));
-            $name = (string) ($vector['name'] ?? 'unnamed');
-            yield $name => [
-                $name,
-                (string) $vector['payload'],
-                (string) $vector['secret'],
-                (int) $vector['timestamp'],
-                (string) $vector['expectedSignature'],
+            if (
+                !\is_array($vector)
+                || !\is_string($vector['name'] ?? null)
+                || !\is_string($vector['payload'] ?? null)
+                || !\is_string($vector['secret'] ?? null)
+                || !\is_int($vector['timestamp'] ?? null)
+                || !\is_string($vector['expectedSignature'] ?? null)
+            ) {
+                throw new \RuntimeException('Malformed fixture vector');
+            }
+            yield $vector['name'] => [
+                $vector['name'],
+                $vector['payload'],
+                $vector['secret'],
+                $vector['timestamp'],
+                $vector['expectedSignature'],
             ];
         }
     }

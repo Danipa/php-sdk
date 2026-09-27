@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Danipa\Sdk;
 
 use Danipa\Sdk\Http\HttpClient;
+use Danipa\Sdk\Resource\BalancesResource;
 use Danipa\Sdk\Resource\InvoicesResource;
 use Danipa\Sdk\Resource\MerchantsResource;
 use Danipa\Sdk\Resource\PaymentLinksResource;
@@ -24,7 +25,8 @@ use Danipa\Sdk\Resource\PaymentLinksResource;
  * The API key is sent as `X-API-Key`; the host is inferred from its prefix:
  * `dk_test_…` → sandbox (`https://api.sandbox.danipa.com/ms`),
  * `dk_live_…` → production (`https://api.danipa.com/ms`, not yet live).
- * Override with {@see DanipaBuilder::baseUrl()}.
+ * Any other prefix fails at build time with a {@see Errors\ConfigurationError}.
+ * Override with {@see DanipaBuilder::environment()} or {@see DanipaBuilder::baseUrl()}.
  */
 final class Danipa
 {
@@ -32,6 +34,7 @@ final class Danipa
         private readonly MerchantsResource $merchants,
         private readonly PaymentLinksResource $paymentLinks,
         private readonly InvoicesResource $invoices,
+        private readonly BalancesResource $balances,
     ) {
     }
 
@@ -50,6 +53,11 @@ final class Danipa
         return $this->invoices;
     }
 
+    public function balances(): BalancesResource
+    {
+        return $this->balances;
+    }
+
     public static function builder(): DanipaBuilder
     {
         return new DanipaBuilder();
@@ -62,6 +70,7 @@ final class Danipa
             merchants: new MerchantsResource($http),
             paymentLinks: new PaymentLinksResource($http),
             invoices: new InvoicesResource($http),
+            balances: new BalancesResource($http),
         );
     }
 }

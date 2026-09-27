@@ -36,23 +36,54 @@ $merchant = $danipa->merchants()->me();
 echo $merchant->businessName, ' bills in ', $merchant->billingCurrency, PHP_EOL;
 ```
 
+## Environments
+
+The key decides where requests go, so a sandbox key can never reach production by accident:
+
+| Key | Default base URL |
+|---|---|
+| `dk_test_…` | `https://api.sandbox.danipa.com/ms` (sandbox) |
+| `dk_live_…` | `https://api.danipa.com/ms` (live; not open yet) |
+| anything else | **`build()` throws `Danipa\Sdk\Errors\ConfigurationError`** (the SDK never guesses; the key is never echoed) |
+
+An explicit choice always wins. Precedence: `baseUrl()` > `environment()` > the key prefix.
+
+```php
+use Danipa\Sdk\Environment;
+
+Danipa::builder()->apiKey($key)->environment(Environment::SANDBOX)->build();
+Danipa::builder()->apiKey($key)->baseUrl('http://localhost:8080/ms')->build(); // e.g. a local stack
+```
+
 ## Resources
 
-| Call | Route | Available to an API key today? |
+Every call below is on the API-key surface (the server's `ApiKeyAuthenticationFilter` route table) and needs the scope
+shown. A key only sees and changes data of its own environment. Nothing else is callable with an API key, so the SDK
+has no other methods.
+
+| Call | Route | Scope |
 |---|---|---|
-| `$danipa->merchants()->me()` | `GET /v1/merchants/me` | **Yes**, needs the key's `account:read` scope |
-| `$danipa->paymentLinks()->create($req)` | `POST /v1/merchants/me/payment-links` | Not yet: `403 API_KEY_SCOPE_DENIED` until the API-key surface (#5573) ships |
-| `$danipa->invoices()->create($req)` | `POST /v1/merchants/me/invoices` | Not yet: `403 API_KEY_SCOPE_DENIED` until #5573 ships |
+| `$danipa->merchants()->me()` | `GET /v1/merchants/me` | `account:read` |
+| `$danipa->paymentLinks()->create($req)` | `POST /v1/merchants/me/payment-links` | `payments:write` |
+| `$danipa->paymentLinks()->list($page, $size)` | `GET /v1/merchants/me/payment-links` | `payments:read` |
+| `$danipa->paymentLinks()->update($id, $req)` | `PUT /v1/merchants/me/payment-links/{id}` | `payments:write` |
+| `$danipa->paymentLinks()->delete($id)` | `DELETE /v1/merchants/me/payment-links/{id}` | `payments:write` |
+| `$danipa->invoices()->create($req)` | `POST /v1/merchants/me/invoices` | `payments:write` |
+| `$danipa->invoices()->list($status, $q, $page, $size)` | `GET /v1/merchants/me/invoices` | `payments:read` |
+| `$danipa->invoices()->get($id)` | `GET /v1/merchants/me/invoices/{id}` | `payments:read` |
+| `$danipa->invoices()->send($id)` | `POST /v1/merchants/me/invoices/{id}/send` | `payments:write` |
+| `$danipa->invoices()->void($id)` | `POST /v1/merchants/me/invoices/{id}/void` | `payments:write` |
+| `$danipa->balances()->list()` | `GET /v1/merchants/me/wallet/balances` | `payments:read` |
 | `Danipa\Sdk\DanipaWebhook` | (static) `verify`, `constructEvent`, `computeSignature` | n/a |
 
-Only `GET /v1/merchants/me` accepts an API key on the server today. The payment-link and invoice models already match the
-server DTOs, so they will work as soon as the API-key surface ships. Until then they raise
-`Danipa\Sdk\Errors\PermissionError` with `errorCode === 'API_KEY_SCOPE_DENIED'`.
+A key without the scope gets `PermissionError` with `errorCode === 'API_KEY_SCOPE_DENIED'`. There is no "get one payment
+link" route for a key; use `list()`. Ids are UUIDs and are checked before anything is sent.
 
 ### Payment links
 
 ```php
 use Danipa\Sdk\Model\CreatePaymentLinkRequest;
+use Danipa\Sdk\Model\UpdatePaymentLinkRequest;
 
 $link = $danipa->paymentLinks()->create(new CreatePaymentLinkRequest(
     title: 'Flat white',
@@ -60,6 +91,17 @@ $link = $danipa->paymentLinks()->create(new CreatePaymentLinkRequest(
     redirectUrl: 'https://shop.example/thanks',
 ));
 echo $link->url, ' ', $link->amount, ' ', $link->status->value;
+
+// Partial update of an ACTIVE link: only the fields you set are sent.
+$link = $danipa->paymentLinks()->update($link->id, new UpdatePaymentLinkRequest(amount: '14.00'));
+
+$page = $danipa->paymentLinks()->list(page: 0, size: 50);   // zero-based pages, size 1–200
+foreach ($page->items as $l) { /* ... */ }
+$page->totalElements; $page->hasNext();
+
+$result = $danipa->paymentLinks()->delete($link->id);
+$result->deleted;      // true: removed (it never took a payment)
+$result->deactivated;  // true: it had payments, so it was deactivated instead
 ```
 
 Open-amount links: `isAmountFixed: false, minAmount: '5', maxAmount: '500'`.
@@ -71,12 +113,17 @@ use Danipa\Sdk\Model\CreateInvoiceRequest;
 use Danipa\Sdk\Model\InvoiceLineItemRequest;
 use Danipa\Sdk\Model\InvoiceStatus;
 
-$invoice = $danipa->invoices()->create(new CreateInvoiceRequest(
+$invoice = $danipa->invoices()->create(new CreateInvoiceRequest(   // created as DRAFT
     customerName: 'Ama K.',
     lineItems: [new InvoiceLineItemRequest('Consulting', 2, '250.00', taxRatePct: '13')],
     customerEmail: 'ama@example.com',
     dueDate: '2026-11-01',
 ));
+
+$invoice = $danipa->invoices()->send($invoice->id);   // DRAFT → SENT; $invoice->paymentLinkUrl is set
+$invoice = $danipa->invoices()->get($invoice->id);
+$page    = $danipa->invoices()->list(status: InvoiceStatus::SENT, q: 'Ama');
+$invoice = $danipa->invoices()->void($invoice->id);   // unpaid only; a paid invoice is a ConflictError (409)
 
 if ($invoice->status === InvoiceStatus::UNKNOWN) {
     // The server sent a status this SDK version doesn't know yet; it is kept in $invoice->statusRaw.
@@ -84,7 +131,19 @@ if ($invoice->status === InvoiceStatus::UNKNOWN) {
 ```
 
 `InvoiceStatus` is `DRAFT`, `SENT`, `PAID`, `OVERDUE`, `VOIDED`, or `UNKNOWN` for any value added on the server later.
-`PaymentLinkStatus` works the same way. An unknown value never throws.
+`PaymentLinkStatus` works the same way. An unknown value never throws. Updating a draft, the PDF, stats, recording an
+offline payment and bulk import are dashboard-only; they are not on the API-key surface.
+
+### Balances
+
+```php
+foreach ($danipa->balances()->list() as $b) {
+    echo $b->currency, ' available ', $b->availableBalance, ' pending ', $b->pendingBalance, PHP_EOL;
+}
+```
+
+One entry per currency the merchant holds (an empty list until something has settled). Business money only, never the
+owner's personal wallet.
 
 ### Money
 
@@ -209,6 +268,17 @@ $danipa = Danipa::builder()
   you build the client, as above. A timed-out call surfaces as `TimeoutError`.
 - The SDK sends `User-Agent: danipa-php/<installed version> php/<PHP version>`. The version is read from Composer's
   installed-package metadata, not hard-coded.
+
+## Sandbox smoke test
+
+`examples/smoke_sandbox.php` walks the whole API-key surface once against the sandbox (it creates, then deletes, a
+payment link, and creates, sends and voids an invoice with no customer contact). It prints only step names and
+OK / FAIL, never the key or response bodies. It refuses anything but a `dk_test_` key. It is not run in CI.
+
+```bash
+composer install
+DANIPA_API_KEY=dk_test_... php examples/smoke_sandbox.php
+```
 
 ## License
 

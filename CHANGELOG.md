@@ -4,9 +4,54 @@ Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [g
 
 ## Unreleased
 
-SDK phase 1: the SDK now matches what the server actually does. Still 0.x, and not yet tagged.
+### 0.3.0 readiness: the whole API-key surface (#5573)
 
-### Breaking changes
+The SDK now covers every route an API key can call (the server's `ApiKeyAuthenticationFilter` route table) and nothing
+else. Still not tagged; the release PR sets 0.3.0.
+
+#### Added
+
+- `paymentLinks()->list($page, $size)`, `->update($id, UpdatePaymentLinkRequest)` and `->delete($id)`. `delete` returns
+  a `PaymentLinkDeleteResult` that says whether the link was deleted (`204`) or, because it had payments, deactivated
+  (`200 {"action":"deactivated"}`).
+- `invoices()->list($status, $q, $page, $size)`, `->get($id)`, `->send($id)` and `->void($id)`.
+- `balances()->list()`: `GET /v1/merchants/me/wallet/balances`, returning `list<WalletBalance>` (one per currency).
+- `Page<T>` for list results (`items`, `number`, `size`, `totalElements`, `totalPages`, `hasNext()`), read from the
+  Spring Data page the server writes (top-level `content` / `totalElements` / ..., and the nested `page` shape too).
+- `UpdatePaymentLinkRequest`, mirroring the server DTO: a partial update, every field optional, null fields omitted.
+- `Merchant::$gstHstNumber` and `Merchant::$qstNumber` (nullable), the merchant's Canadian sales-tax registrations,
+  now on the server's `MerchantResponse` (#5608).
+- `Environment` enum (`SANDBOX`, `LIVE`) and `DanipaBuilder::environment()`.
+- Client-side checks before anything is sent: path ids must be UUIDs (the server's key route table only matches a
+  UUID, so any other id came back as a misleading `403 API_KEY_SCOPE_DENIED`); `page >= 0`; `size` 1–200; the invoice
+  `status` filter must be one of the server's `InvoiceStatus` values (the server answers an unknown one with a 500).
+- `test/RouteContractTest.php`: the SDK's (verb, path) set must equal the server's API-key route table, and every public
+  resource method must be in it, so drift fails CI.
+- `examples/smoke_sandbox.php`: a live sandbox walk of every call (not run in CI).
+
+#### Changed
+
+- **Breaking: an API key whose prefix is neither `dk_test_` nor `dk_live_` now fails at `build()` with
+  `Errors\ConfigurationError`** (an `InvalidArgumentException`) unless you pass `baseUrl()` or `environment()`. It used
+  to be sent to sandbox silently. The key is never included in the message.
+- `Danipa`'s public constructor takes a fourth argument, `BalancesResource $balances` (build clients with `Danipa::builder()`).
+- Base-URL precedence is explicit: `baseUrl()` > `environment()` > key prefix. A blank `baseUrl()` is rejected.
+- An empty request body is sent as `{}`, not `[]`.
+- The payment-link and invoice `create` docs no longer say the routes are key-denied: they are on the API-key surface.
+- Internal: `HttpClient::SANDBOX_BASE_URL` / `PRODUCTION_BASE_URL` are gone; use `Environment::SANDBOX->baseUrl()` /
+  `Environment::LIVE->baseUrl()`.
+
+#### Removed
+
+- Nothing callable was removed: every existing method (`merchants()->me()`, `paymentLinks()->create()`,
+  `invoices()->create()`) is on the key route table. The SDK deliberately has no `paymentLinks()->get()`, invoice update,
+  PDF, stats, record-payment or bulk methods: those routes are dashboard-only and would always return `403` to a key.
+
+### SDK phase 1
+
+SDK phase 1: the SDK now matches what the server actually does.
+
+#### Breaking changes
 
 - **Auth header:** the API key is sent as `X-API-Key`, not `Authorization: Bearer`. The server never accepted a bearer
   API key, and sending both headers is rejected with `403 AMBIGUOUS_CREDENTIALS`.
@@ -41,7 +86,7 @@ SDK phase 1: the SDK now matches what the server actually does. Still 0.x, and n
 - **User-Agent** is now `danipa-php/<installed version> php/<runtime version>`. The version is read from Composer
   metadata; it used to be hard-coded as `danipa-php-sdk/0.1.0`.
 
-### Removed
+#### Removed
 
 - **`collections()`, `disbursements()` and `wallets()` resources**, with their models (`Collection`,
   `CreateCollectionRequest`, `Disbursement`, `CreateDisbursementRequest`, `WalletBalance`, `Payer`, `Recipient`,
@@ -49,7 +94,7 @@ SDK phase 1: the SDK now matches what the server actually does. Still 0.x, and n
   those routes has ever existed on the server, so every call failed. They will come back when there is a real API-key
   surface behind them (#5573).
 
-### Added
+#### Added
 
 - `$danipa->merchants()->me()`: `GET /v1/merchants/me`, returning the full `MerchantResponse` as `Merchant`. This is
   the one route an API key can reach today (it needs the `account:read` scope).
@@ -66,7 +111,7 @@ SDK phase 1: the SDK now matches what the server actually does. Still 0.x, and n
 - PR CI (`.github/workflows/sdk-php-ci.yml`) runs PHP 8.2, 8.3, 8.4 and 8.5 with composer validate, PHPStan 2 at level
   max (over `src` and `test`) and PHPUnit 11.
 
-### Fixed
+#### Fixed
 
 - Webhook verification no longer rejects a valid payload or timestamp that PHP's `empty()` treats as falsy (`"0"`).
   Empty checks are now `=== ''`.

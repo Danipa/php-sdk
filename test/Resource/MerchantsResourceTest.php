@@ -18,7 +18,8 @@ final class MerchantsResourceTest extends TestCase
          "country":"CA","status":"ACTIVE","kybStatus":"APPROVED","tier":"FREE","createdAt":"2026-05-01T12:00:00Z",
          "city":"Toronto","contactEmail":"ops@example.com","slug":"kin-and-calabash","publicCatalogEnabled":true,
          "defaultTaxRatePct":13.00,"effectiveDefaultTaxRatePct":13.000,"billingCurrency":"CAD",
-         "checkoutMode":"DANIPA_CHECKOUT","someFutureField":{"x":1}}
+         "checkoutMode":"DANIPA_CHECKOUT","gstHstNumber":"123456789RT0001","qstNumber":"1234567890TQ0001",
+         "someFutureField":{"x":1}}
         JSON;
 
     public function testMeGetsTheMerchantProfile(): void
@@ -40,6 +41,8 @@ final class MerchantsResourceTest extends TestCase
         self::assertSame('13.00', $merchant->defaultTaxRatePct, 'decimal parsed exactly from a JSON number');
         self::assertSame('13.000', $merchant->effectiveDefaultTaxRatePct);
         self::assertNull($merchant->taxId, 'NON_NULL-absent fields are null');
+        self::assertSame('123456789RT0001', $merchant->gstHstNumber);
+        self::assertSame('1234567890TQ0001', $merchant->qstNumber);
         self::assertNotNull($merchant->meta);
         self::assertSame('cor-me', $merchant->meta->requestId);
     }

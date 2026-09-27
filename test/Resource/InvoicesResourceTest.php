@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace Danipa\Sdk\Tests\Resource;
 
+use Danipa\Sdk\Errors\ConflictError;
+use Danipa\Sdk\Errors\NotFoundError;
+use Danipa\Sdk\Errors\PermissionError;
 use Danipa\Sdk\Errors\ResponseParseError;
+use Danipa\Sdk\Errors\ValidationError;
+use Danipa\Sdk\RequestOptions;
 use Danipa\Sdk\Model\CreateInvoiceRequest;
 use Danipa\Sdk\Model\InvoiceLineItemRequest;
 use Danipa\Sdk\Model\InvoiceStatus;
@@ -163,5 +168,166 @@ final class InvoicesResourceTest extends TestCase
         }
         $this->expectException(\InvalidArgumentException::class);
         new CreateInvoiceRequest(customerName: 'x', lineItems: []);
+    }
+
+    private const ID = '0b9e4d52-6c1f-4a8e-9d3b-7f2a1e5c8d90';
+
+    public function testListSendsFiltersAndPagingAndParsesThePage(): void
+    {
+        $fake = (new FakeClient())->reply(
+            200,
+            '{"content":[' . self::response('SENT') . '],"totalElements":1,"totalPages":1,"number":0,"size":50}',
+        );
+        $page = (new InvoicesResource(Sdk::http($fake)))->list(status: InvoiceStatus::SENT, q: 'Ama K', size: 50);
+
+        $req = $fake->lastRequest();
+        self::assertSame('GET', $req->getMethod());
+        self::assertSame(
+            Sdk::BASE . '/v1/merchants/me/invoices?status=SENT&q=Ama%20K&page=0&size=50',
+            (string) $req->getUri(),
+        );
+        self::assertSame('', $req->getHeaderLine('Idempotency-Key'));
+        self::assertCount(1, $page->items);
+        self::assertSame('565.00', $page->items[0]->total);
+        self::assertSame(1, $page->totalElements);
+        self::assertFalse($page->hasNext());
+    }
+
+    public function testListWithoutFiltersOmitsThem(): void
+    {
+        $fake = (new FakeClient())->reply(200, '{"content":[],"totalElements":0,"totalPages":0,"number":0,"size":20}');
+        (new InvoicesResource(Sdk::http($fake)))->list();
+
+        self::assertSame(
+            Sdk::BASE . '/v1/merchants/me/invoices?page=0&size=20',
+            (string) $fake->lastRequest()->getUri(),
+        );
+    }
+
+    public function testListAcceptsAStatusNameCaseInsensitively(): void
+    {
+        $fake = (new FakeClient())->reply(200, '{"content":[]}');
+        (new InvoicesResource(Sdk::http($fake)))->list(status: 'overdue');
+        self::assertStringContainsString('status=OVERDUE', (string) $fake->lastRequest()->getUri());
+    }
+
+    /** @return iterable<string, array{InvoiceStatus|string}> */
+    public static function badStatusFilters(): iterable
+    {
+        yield 'UNKNOWN case' => [InvoiceStatus::UNKNOWN];
+        yield 'retired value' => ['CANCELLED'];
+        yield 'typo' => ['PIAD'];
+        yield 'blank' => [''];
+    }
+
+    #[DataProvider('badStatusFilters')]
+    public function testListRejectsAStatusTheServerDoesNotKnowBeforeSending(InvoiceStatus|string $status): void
+    {
+        $fake = new FakeClient();
+        try {
+            (new InvoicesResource(Sdk::http($fake)))->list(status: $status);
+            self::fail('an unknown status filter must be rejected (the server 500s on it)');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('DRAFT, SENT, PAID, OVERDUE, VOIDED', $e->getMessage());
+        }
+        self::assertSame([], $fake->sent());
+    }
+
+    public function testGetFetchesOneInvoice(): void
+    {
+        $fake = (new FakeClient())->reply(200, self::response('DRAFT'));
+        $inv = (new InvoicesResource(Sdk::http($fake)))->get(self::ID);
+
+        $req = $fake->lastRequest();
+        self::assertSame('GET', $req->getMethod());
+        self::assertSame(Sdk::BASE . '/v1/merchants/me/invoices/' . self::ID, (string) $req->getUri());
+        self::assertSame(InvoiceStatus::DRAFT, $inv->status);
+        self::assertSame('Ama K.', $inv->customerName);
+    }
+
+    public function testGetOfAnotherEnvironmentsInvoiceIsNotFound(): void
+    {
+        $fake = (new FakeClient())->reply(404, '{"code":"INVOICE_NOT_FOUND","description":"Invoice not found"}');
+        try {
+            (new InvoicesResource(Sdk::http($fake)))->get(self::ID);
+            self::fail('expected NotFoundError');
+        } catch (NotFoundError $e) {
+            self::assertSame('INVOICE_NOT_FOUND', $e->errorCode);
+        }
+    }
+
+    public function testGetRejectsANonUuidIdBeforeSending(): void
+    {
+        $fake = new FakeClient();
+        try {
+            (new InvoicesResource(Sdk::http($fake)))->get('INV-0001');
+            self::fail('a non-UUID id must be rejected');
+        } catch (\InvalidArgumentException) {
+        }
+        self::assertSame([], $fake->sent());
+    }
+
+    public function testSendPostsWithoutABodyAndWithAnIdempotencyKey(): void
+    {
+        $fake = (new FakeClient())->reply(200, self::response('SENT'));
+        $inv = (new InvoicesResource(Sdk::http($fake)))->send(self::ID, RequestOptions::withIdempotencyKey('send-1'));
+
+        $req = $fake->lastRequest();
+        self::assertSame('POST', $req->getMethod());
+        self::assertSame(Sdk::BASE . '/v1/merchants/me/invoices/' . self::ID . '/send', (string) $req->getUri());
+        self::assertSame('send-1', $req->getHeaderLine('Idempotency-Key'));
+        self::assertSame('', (string) $req->getBody());
+        self::assertSame(InvoiceStatus::SENT, $inv->status);
+    }
+
+    public function testSendingANonDraftIsAValidationError(): void
+    {
+        $fake = (new FakeClient())->reply(
+            422,
+            '{"code":"INVOICE_NOT_DRAFT","description":"Invoice is not in DRAFT status"}',
+        );
+        try {
+            (new InvoicesResource(Sdk::http($fake)))->send(self::ID);
+            self::fail('expected ValidationError');
+        } catch (ValidationError $e) {
+            self::assertSame(422, $e->status);
+            self::assertSame('INVOICE_NOT_DRAFT', $e->errorCode);
+        }
+    }
+
+    public function testVoidPostsToTheVoidRoute(): void
+    {
+        $fake = (new FakeClient())->reply(200, self::response('VOIDED'));
+        $inv = (new InvoicesResource(Sdk::http($fake)))->void(self::ID);
+
+        $req = $fake->lastRequest();
+        self::assertSame('POST', $req->getMethod());
+        self::assertSame(Sdk::BASE . '/v1/merchants/me/invoices/' . self::ID . '/void', (string) $req->getUri());
+        self::assertNotSame('', $req->getHeaderLine('Idempotency-Key'));
+        self::assertSame(InvoiceStatus::VOIDED, $inv->status);
+    }
+
+    public function testVoidingAPaidInvoiceIsAConflict(): void
+    {
+        $fake = (new FakeClient())->reply(409, '{"code":"INVOICE_ALREADY_PAID","description":"already paid"}');
+        $this->expectException(ConflictError::class);
+        (new InvoicesResource(Sdk::http($fake)))->void(self::ID);
+    }
+
+    public function testCreateWithoutWriteScopeIsAPermissionError(): void
+    {
+        $fake = (new FakeClient())->reply(
+            403,
+            '{"code":"API_KEY_SCOPE_DENIED","description":"missing payments:write"}',
+        );
+        try {
+            (new InvoicesResource(Sdk::http($fake)))->create(new CreateInvoiceRequest(
+                customerName: 'x',
+                lineItems: [new InvoiceLineItemRequest('a', 1, '1.00')],
+            ));
+            self::fail('expected PermissionError');
+        } catch (PermissionError $e) {
+            self::assertSame('API_KEY_SCOPE_DENIED', $e->errorCode);
+        }
     }
 }

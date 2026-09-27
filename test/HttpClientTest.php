@@ -406,7 +406,12 @@ final class HttpClientTest extends TestCase
     {
         self::assertSame('https://api.sandbox.danipa.com/ms', HttpClient::inferBaseUrl('dk_test_abc'));
         self::assertSame('https://api.danipa.com/ms', HttpClient::inferBaseUrl('dk_live_abc'));
-        self::assertSame('https://api.sandbox.danipa.com/ms', HttpClient::inferBaseUrl('other'));
+    }
+
+    public function testUnknownKeyPrefixIsAConfigurationErrorNotASandboxGuess(): void
+    {
+        $this->expectException(\Danipa\Sdk\Errors\ConfigurationError::class);
+        HttpClient::inferBaseUrl('other');
     }
 
     public function testLiveKeyTargetsProductionHost(): void

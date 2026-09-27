@@ -16,8 +16,7 @@ final class MerchantsResource
 
     /**
      * `GET /v1/merchants/me` — the profile of the merchant that owns the API
-     * key. Needs the key's `account:read` scope. This is the one route an API
-     * key can reach today; use it to check a key works.
+     * key. Needs the key's `account:read` scope; use it to check a key works.
      *
      * @throws \Danipa\Sdk\Errors\DanipaError
      */

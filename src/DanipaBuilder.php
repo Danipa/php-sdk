@@ -25,6 +25,7 @@ final class DanipaBuilder
 {
     private ?string $apiKey = null;
     private ?string $baseUrl = null;
+    private ?Environment $environment = null;
     private int $maxRetries = HttpClient::DEFAULT_MAX_RETRIES;
     private ?ClientInterface $transport = null;
     private ?RequestFactoryInterface $requestFactory = null;
@@ -37,10 +38,25 @@ final class DanipaBuilder
         return $this;
     }
 
-    /** Optional override; by default inferred from the API key prefix. */
+    /**
+     * Optional explicit base URL (e.g. a local stack). Always wins over
+     * {@see environment()} and over the API key prefix.
+     */
     public function baseUrl(string $baseUrl): self
     {
         $this->baseUrl = $baseUrl;
+        return $this;
+    }
+
+    /**
+     * Optional explicit environment. Wins over the API key prefix; a
+     * {@see baseUrl()} wins over it. By default the environment is taken
+     * from the key: `dk_test_…` → sandbox, `dk_live_…` → live, and any other
+     * prefix makes {@see build()} throw a {@see Errors\ConfigurationError}.
+     */
+    public function environment(Environment $environment): self
+    {
+        $this->environment = $environment;
         return $this;
     }
 
@@ -75,6 +91,11 @@ final class DanipaBuilder
         return $this;
     }
 
+    /**
+     * @throws Errors\ConfigurationError when no base URL or environment is given and the
+     *                                   API key prefix is neither `dk_test_` nor `dk_live_`.
+     * @throws \InvalidArgumentException on a missing or malformed API key.
+     */
     public function build(): Danipa
     {
         if ($this->apiKey === null || trim($this->apiKey) === '') {
@@ -82,7 +103,7 @@ final class DanipaBuilder
         }
         return Danipa::fromHttpClient(new HttpClient(
             apiKey: $this->apiKey,
-            baseUrl: $this->baseUrl,
+            baseUrl: $this->baseUrl ?? $this->environment?->baseUrl(),
             maxRetries: $this->maxRetries,
             client: $this->transport,
             requestFactory: $this->requestFactory,

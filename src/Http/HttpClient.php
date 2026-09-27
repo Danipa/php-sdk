@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Danipa\Sdk\Http;
 
 use Danipa\Sdk\Errors\AuthenticationError;
+use Danipa\Sdk\Errors\ConfigurationError;
 use Danipa\Sdk\Errors\ConflictError;
 use Danipa\Sdk\Errors\ConnectionError;
 use Danipa\Sdk\Errors\DanipaApiError;
@@ -19,6 +20,7 @@ use Danipa\Sdk\Errors\ValidationError;
 use Danipa\Sdk\Internal\Json;
 use Danipa\Sdk\Internal\MalformedResponse;
 use Danipa\Sdk\Internal\Version;
+use Danipa\Sdk\Environment;
 use Danipa\Sdk\RequestOptions;
 use Danipa\Sdk\ResponseMeta;
 use Http\Discovery\Psr17FactoryDiscovery;
@@ -44,9 +46,6 @@ use Psr\Http\Message\StreamFactoryInterface;
  */
 final class HttpClient
 {
-    public const SANDBOX_BASE_URL = 'https://api.sandbox.danipa.com/ms';
-    /** Production is not live yet; `dk_live_` keys are reserved for it. */
-    public const PRODUCTION_BASE_URL = 'https://api.danipa.com/ms';
     public const DEFAULT_MAX_RETRIES = 2;
 
     public const BACKOFF_BASE_MS = 500;
@@ -94,6 +93,9 @@ final class HttpClient
         if ($maxRetries < 0) {
             throw new \InvalidArgumentException('Danipa SDK: maxRetries must be >= 0');
         }
+        if ($baseUrl !== null && trim($baseUrl) === '') {
+            throw new ConfigurationError('Danipa SDK: baseUrl must not be blank');
+        }
         $this->baseUrl = rtrim($baseUrl ?? self::inferBaseUrl($apiKey), '/');
         $this->client = $client ?? Psr18ClientDiscovery::find();
         $this->requestFactory = $requestFactory ?? Psr17FactoryDiscovery::findRequestFactory();
@@ -106,13 +108,14 @@ final class HttpClient
     }
 
     /**
-     * `dk_live_…` → production (not yet live), anything else → sandbox.
+     * `dk_test_…` → sandbox, `dk_live_…` → production (not yet live). Any
+     * other prefix is a {@see ConfigurationError}: the SDK never guesses.
+     *
+     * @throws ConfigurationError
      */
     public static function inferBaseUrl(string $apiKey): string
     {
-        return str_starts_with($apiKey, 'dk_live_')
-            ? self::PRODUCTION_BASE_URL
-            : self::SANDBOX_BASE_URL;
+        return Environment::fromApiKey($apiKey)->baseUrl();
     }
 
     /**
@@ -198,7 +201,11 @@ final class HttpClient
             $request = $request->withHeader('Idempotency-Key', $idempotencyKey);
         }
         if ($body !== null) {
-            $json = json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+            // A request body is always a JSON object; an empty PHP array would encode as `[]`.
+            $json = json_encode(
+                $body === [] ? new \stdClass() : $body,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION,
+            );
             $request = $request
                 ->withHeader('Content-Type', 'application/json')
                 ->withBody($this->streamFactory->createStream($json));

@@ -52,6 +52,10 @@ final class Merchant
         public readonly ?string $checkoutMode,
         public readonly ?string $externalCheckoutUrl,
         public readonly ?ResponseMeta $meta = null,
+        /** Canadian GST/HST registration number, normalized (e.g. `123456789RT0001`); null when not registered. */
+        public readonly ?string $gstHstNumber = null,
+        /** Québec QST registration number, normalized (e.g. `1234567890TQ0001`); null when not registered. */
+        public readonly ?string $qstNumber = null,
     ) {
     }
 
@@ -96,6 +100,8 @@ final class Merchant
             checkoutMode: Json::optString($data, 'checkoutMode'),
             externalCheckoutUrl: Json::optString($data, 'externalCheckoutUrl'),
             meta: $meta,
+            gstHstNumber: Json::optString($data, 'gstHstNumber'),
+            qstNumber: Json::optString($data, 'qstNumber'),
         );
     }
 }

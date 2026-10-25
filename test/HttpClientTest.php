@@ -414,13 +414,17 @@ final class HttpClientTest extends TestCase
         HttpClient::inferBaseUrl('other');
     }
 
-    public function testLiveKeyTargetsProductionHost(): void
+    public function testLiveKeyIsRefusedUntilProductionLaunches(): void
     {
-        $fake = (new FakeClient())->reply(200, '{}');
-        (new HttpClient(apiKey: 'dk_live_x', client: $fake, sleeper: static fn (int $ms) => null))
-            ->request('GET', '/v1/merchants/me');
-
-        self::assertSame('https://api.danipa.com/ms/v1/merchants/me', (string) $fake->lastRequest()->getUri());
+        $fake = new FakeClient();
+        try {
+            new HttpClient(apiKey: 'dk_live_topsecret', client: $fake, sleeper: static fn (int $ms) => null);
+            self::fail('expected a ConfigurationError');
+        } catch (\Danipa\Sdk\Errors\ConfigurationError $e) {
+            self::assertSame(HttpClient::PRODUCTION_NOT_LIVE_MESSAGE, $e->getMessage());
+            self::assertStringNotContainsString('topsecret', $e->getMessage());
+        }
+        self::assertSame([], $fake->sent());
     }
 
     public function testEmptyApiKeyRejected(): void

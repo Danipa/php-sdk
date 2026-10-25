@@ -101,6 +101,9 @@ final class DanipaBuilder
         if ($this->apiKey === null || trim($this->apiKey) === '') {
             throw new \InvalidArgumentException('Danipa SDK: apiKey is required');
         }
+        if ($this->baseUrl === null && $this->environment === Environment::LIVE) {
+            throw new Errors\ConfigurationError(HttpClient::PRODUCTION_NOT_LIVE_MESSAGE);
+        }
         return Danipa::fromHttpClient(new HttpClient(
             apiKey: $this->apiKey,
             baseUrl: $this->baseUrl ?? $this->environment?->baseUrl(),

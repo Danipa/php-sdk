@@ -52,6 +52,15 @@ final class HttpClient
     public const BACKOFF_CAP_MS = 8000;
     public const RETRY_AFTER_CAP_SECONDS = 60;
 
+    /**
+     * The {@see ConfigurationError} raised when a client would default to the
+     * live host. Production is not live yet, so failing at construction beats
+     * an opaque DNS error on the first call; an explicit base URL is never
+     * blocked. A later 0.x release removes this guard.
+     */
+    public const PRODUCTION_NOT_LIVE_MESSAGE = 'Danipa SDK: production is not live yet — use a dk_test_ key against '
+        . 'sandbox. (To reach a live host anyway, pass an explicit baseUrl().)';
+
     private const RETRYABLE_STATUSES = [408, 429, 502, 503, 504];
     private const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
     private const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
@@ -95,6 +104,9 @@ final class HttpClient
         }
         if ($baseUrl !== null && trim($baseUrl) === '') {
             throw new ConfigurationError('Danipa SDK: baseUrl must not be blank');
+        }
+        if ($baseUrl === null && Environment::fromApiKey($apiKey) === Environment::LIVE) {
+            throw new ConfigurationError(self::PRODUCTION_NOT_LIVE_MESSAGE);
         }
         $this->baseUrl = rtrim($baseUrl ?? self::inferBaseUrl($apiKey), '/');
         $this->client = $client ?? Psr18ClientDiscovery::find();

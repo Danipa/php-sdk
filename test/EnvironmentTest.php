@@ -36,9 +36,19 @@ final class EnvironmentTest extends TestCase
         self::assertSame('https://api.sandbox.danipa.com/ms/v1/merchants/me', self::urlFor('dk_test_abc'));
     }
 
-    public function testLiveKeyGoesToProduction(): void
+    public function testLiveKeyIsRefusedUntilProductionLaunches(): void
     {
-        self::assertSame('https://api.danipa.com/ms/v1/merchants/me', self::urlFor('dk_live_abc'));
+        self::assertSame('https://api.danipa.com/ms', Environment::LIVE->baseUrl());
+        $this->expectException(ConfigurationError::class);
+        $this->expectExceptionMessage('production is not live yet');
+        self::urlFor('dk_live_abc');
+    }
+
+    public function testExplicitLiveEnvironmentIsRefusedUntilProductionLaunches(): void
+    {
+        $this->expectException(ConfigurationError::class);
+        $this->expectExceptionMessage('production is not live yet');
+        self::urlFor('dk_test_abc', Environment::LIVE);
     }
 
     /** @return iterable<string, array{string}> */
@@ -85,7 +95,6 @@ final class EnvironmentTest extends TestCase
             'https://api.sandbox.danipa.com/ms/v1/merchants/me',
             self::urlFor('dk_live_abc', Environment::SANDBOX),
         );
-        self::assertSame('https://api.danipa.com/ms/v1/merchants/me', self::urlFor('dk_test_abc', Environment::LIVE));
     }
 
     public function testAnExplicitChoiceAllowsAnUnknownPrefix(): void

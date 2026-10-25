@@ -27,7 +27,7 @@ use Danipa\Sdk\Danipa;
 
 // The API key is sent as the X-API-Key header. Its prefix picks the host:
 //   dk_test_… → https://api.sandbox.danipa.com/ms
-//   dk_live_… → https://api.danipa.com/ms   (production is not live yet)
+//   dk_live_… → https://api.danipa.com/ms   (production is not live yet: build() throws ConfigurationError)
 $danipa = Danipa::builder()
     ->apiKey(getenv('DANIPA_API_KEY'))
     ->build();
@@ -43,7 +43,7 @@ The key decides where requests go, so a sandbox key can never reach production b
 | Key | Default base URL |
 |---|---|
 | `dk_test_…` | `https://api.sandbox.danipa.com/ms` (sandbox) |
-| `dk_live_…` | `https://api.danipa.com/ms` (live; not open yet) |
+| `dk_live_…` | `https://api.danipa.com/ms`. **Production is not live yet:** `build()` throws `ConfigurationError` ("production is not live yet — use a dk_test_ key against sandbox") unless you pass an explicit `baseUrl()`. Nothing is sent. |
 | anything else | **`build()` throws `Danipa\Sdk\Errors\ConfigurationError`** (the SDK never guesses; the key is never echoed) |
 
 An explicit choice always wins. Precedence: `baseUrl()` > `environment()` > the key prefix.

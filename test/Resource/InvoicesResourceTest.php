@@ -245,6 +245,17 @@ final class InvoicesResourceTest extends TestCase
         self::assertSame('Ama K.', $inv->customerName);
     }
 
+    /** #7615: "taxHeld": true marks a draft held for a tax-blocked period; absent otherwise. */
+    public function testGetReadsTaxHeldWhenPresentAndNullWhenAbsent(): void
+    {
+        $held = substr(self::response('DRAFT'), 0, -1) . ',"taxHeld":true}';
+        $fake = (new FakeClient())->reply(200, $held)->reply(200, self::response('DRAFT'));
+        $resource = new InvoicesResource(Sdk::http($fake));
+
+        self::assertTrue($resource->get(self::ID)->taxHeld);
+        self::assertNull($resource->get(self::ID)->taxHeld);
+    }
+
     public function testGetOfAnotherEnvironmentsInvoiceIsNotFound(): void
     {
         $fake = (new FakeClient())->reply(404, '{"code":"INVOICE_NOT_FOUND","description":"Invoice not found"}');

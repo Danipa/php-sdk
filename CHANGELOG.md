@@ -4,6 +4,10 @@ Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [g
 
 ## Unreleased
 
+### Added
+
+- `Invoice::$taxHeld` (`?bool`, last constructor parameter, default `null`): `true` on a draft held for a tax-blocked subscription period, whose tax shows as 0 until it is sent; `null` when the server omits it. Existing positional constructor calls keep working (#7615).
+
 ## 0.3.0 — 2026-10-25
 
 ### Upgrade notes (read first)

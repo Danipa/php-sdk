@@ -207,6 +207,22 @@ final class Json
      * @param array<array-key, mixed> $data
      * @throws MalformedResponse
      */
+    public static function optBool(array $data, string $key): ?bool
+    {
+        $v = $data[$key] ?? null;
+        if ($v === null) {
+            return null;
+        }
+        if (!\is_bool($v)) {
+            throw new MalformedResponse(sprintf('field "%s" must be a boolean', $key));
+        }
+        return $v;
+    }
+
+    /**
+     * @param array<array-key, mixed> $data
+     * @throws MalformedResponse
+     */
     public static function bool(array $data, string $key, bool $default): bool
     {
         $v = $data[$key] ?? null;

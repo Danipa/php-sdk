@@ -43,6 +43,12 @@ final class Invoice
         public readonly ?string $notes,
         public readonly ?string $createdAt,
         public readonly ?ResponseMeta $meta = null,
+        /**
+         * true on a draft held for a tax-blocked subscription period: its tax is not worked out
+         * yet (shown as 0) and is resolved when it is sent. null otherwise (the server omits it).
+         * Last, so existing positional constructor calls keep working (#7615).
+         */
+        public readonly ?bool $taxHeld = null,
     ) {
     }
 
@@ -79,6 +85,7 @@ final class Invoice
             notes: Json::optString($data, 'notes'),
             createdAt: Json::optString($data, 'createdAt'),
             meta: $meta,
+            taxHeld: Json::optBool($data, 'taxHeld'),
         );
     }
 }

@@ -2,7 +2,7 @@
 
 Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [github.com/Danipa/php-sdk](https://github.com/Danipa/php-sdk)
 
-## Unreleased
+## 0.4.0 — 2026-10-26
 
 ### Added
 

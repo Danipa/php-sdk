@@ -279,4 +279,74 @@ final class DanipaWebhookTest extends TestCase
             ];
         }
     }
+
+    // ---- dedupeKey (#7614) ------------------------------------------------
+    // Danipa re-signs every retry with a fresh timestamp, so only the body is
+    // stable across attempts; X-Danipa-Event / X-Danipa-Delivery are unsigned.
+
+    /** @return array<string, string> */
+    private static function signedAt(string $payload, int $ts, string $delivery = 'd-42'): array
+    {
+        return [
+            'X-Danipa-Signature' => self::sig($payload, self::SECRET, $ts),
+            'X-Danipa-Timestamp' => (string) $ts,
+            'X-Danipa-Event' => 'payment.completed',
+            'X-Danipa-Delivery' => $delivery,
+        ];
+    }
+
+    public function testDedupeKeyIsStableAcrossRetriesResignedWithAFreshTimestamp(): void
+    {
+        $first = DanipaWebhook::constructEvent(self::PAYLOAD, self::signedAt(self::PAYLOAD, self::NOW - 120), self::SECRET, now: self::NOW);
+        $retry = DanipaWebhook::constructEvent(
+            Utils::streamFor(self::PAYLOAD),
+            self::signedAt(self::PAYLOAD, self::NOW, 'd-other'),
+            self::SECRET,
+            now: self::NOW,
+        );
+        self::assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $first->dedupeKey);
+        self::assertSame($first->dedupeKey, $retry->dedupeKey);
+    }
+
+    public function testDedupeKeyDiffersForADifferentBody(): void
+    {
+        $other = '{"event":"payment.completed","amount":100.51}';
+        $a = DanipaWebhook::constructEvent(self::PAYLOAD, self::signedAt(self::PAYLOAD, self::NOW), self::SECRET, now: self::NOW);
+        $b = DanipaWebhook::constructEvent($other, self::signedAt($other, self::NOW), self::SECRET, now: self::NOW);
+        self::assertNotSame($a->dedupeKey, $b->dedupeKey);
+    }
+
+    #[DataProvider('crossSdkDedupeKeyProvider')]
+    public function testCrossSdkDedupeKeyParity(string $name, string $payload, string $expected): void
+    {
+        foreach ([self::NOW - 60, self::NOW] as $ts) {
+            $event = DanipaWebhook::constructEvent($payload, self::signedAt($payload, $ts), self::SECRET, now: self::NOW);
+            self::assertSame($expected, $event->dedupeKey, sprintf('Vector "%s" @%d', $name, $ts));
+        }
+    }
+
+    /** @return iterable<string, array{string, string, string}> */
+    public static function crossSdkDedupeKeyProvider(): iterable
+    {
+        $raw = file_get_contents(self::FIXTURE_PATH);
+        if ($raw === false) {
+            throw new \RuntimeException('Could not read fixture: ' . self::FIXTURE_PATH);
+        }
+        $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        $vectors = \is_array($decoded) && \is_array($decoded['dedupeKey'] ?? null) ? ($decoded['dedupeKey']['vectors'] ?? null) : null;
+        if (!\is_array($vectors) || $vectors === []) {
+            throw new \RuntimeException('Fixture missing "dedupeKey.vectors" array');
+        }
+        foreach ($vectors as $vector) {
+            if (
+                !\is_array($vector)
+                || !\is_string($vector['name'] ?? null)
+                || !\is_string($vector['payload'] ?? null)
+                || !\is_string($vector['expectedDigest'] ?? null)
+            ) {
+                throw new \RuntimeException('Malformed dedupeKey fixture vector');
+            }
+            yield $vector['name'] => [$vector['name'], $vector['payload'], $vector['expectedDigest']];
+        }
+    }
 }

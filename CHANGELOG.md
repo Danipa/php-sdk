@@ -6,6 +6,7 @@ Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [g
 
 ### Added
 
+- `WebhookEvent::$dedupeKey` (readonly `string`, set by the constructor; signature unchanged): lowercase hex SHA-256 of the verified raw body bytes, the same on every retry of a delivery. It identifies a body, not a delivery: a dashboard replay, or two distinct events with byte-identical bodies, share it, so prefer the body's own unique id where it has one. Dedupe on it, or on the body's own id. Danipa re-signs every webhook retry with a fresh timestamp, so the signature and timestamp change per attempt while the body stays the same. The docs no longer say to dedupe on the delivery id: `X-Danipa-Event` and `X-Danipa-Delivery` are unsigned and are now documented as informational only; branch on the body's own event type where present (#7614).
 - `Invoice::$taxHeld` (`?bool`, last constructor parameter, default `null`): `true` on a draft held for a tax-blocked subscription period, whose tax shows as 0 until it is sent; `null` when the server omits it. Existing positional constructor calls keep working (#7615).
 
 ## 0.3.0 — 2026-10-25

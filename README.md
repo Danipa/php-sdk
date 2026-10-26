@@ -243,9 +243,15 @@ try {
     exit;
 }
 
-// $event->type ('payment.completed', ...), $event->deliveryId (dedupe on it), $event->data (decoded body)
+if (alreadyProcessed($event->dedupeKey)) { // SHA-256 of the raw body: same on every retry
+    http_response_code(200);
+    exit;
+}
+// $event->data (decoded body): branch on the body's own event type, where present
 http_response_code(200);
 ```
+
+**Dedupe and routing.** Only `<X-Danipa-Timestamp>.<raw body>` is signed, and Danipa re-signs every retry with a fresh timestamp: the signature and timestamp change on each attempt while the body stays byte-identical. Dedupe on `$event->dedupeKey` (lowercase hex SHA-256 of the verified raw body, the same on every retry), or on the body's own id where it has one. Branch on the body's own event type where present. The dedupe key identifies a body, not a delivery: a replay you trigger from the dashboard (same body, new delivery) and two distinct events with byte-identical bodies get the same key, so a handler that skips seen keys skips them too. Prefer the body's own unique id where it has one, and clear a key from your processed store before replaying that event on purpose. `$event->type` and `$event->deliveryId` come from the `X-Danipa-Event` and `X-Danipa-Delivery` headers, which are **not signed**: treat them as informational only.
 
 Laravel and Symfony: `DanipaWebhook::constructEvent($request->getContent(), $request->headers->all(), $secrets)`.
 

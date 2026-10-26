@@ -18,6 +18,11 @@ use Psr\Http\Message\StreamInterface;
  * `X-Danipa-Event` and `X-Danipa-Delivery`. Always verify the RAW body bytes —
  * re-encoding decoded JSON changes the bytes and breaks the signature.
  *
+ * Only the timestamp and body are signed, and Danipa re-signs every retry with
+ * a fresh timestamp. Dedupe on `$event->dedupeKey` (SHA-256 of the raw body) or
+ * the body's own id, and branch on the body's own event type where present.
+ * `X-Danipa-Event` and `X-Danipa-Delivery` are UNSIGNED and informational only.
+ *
  * ```php
  * use Danipa\Sdk\DanipaWebhook;
  * use Danipa\Sdk\Errors\WebhookVerificationError;
@@ -32,7 +37,10 @@ use Psr\Http\Message\StreamInterface;
  *     http_response_code(400);
  *     exit;
  * }
- * // $event->type, $event->deliveryId, $event->data
+ * if (alreadyProcessed($event->dedupeKey)) { // same key on every retry
+ *     exit;
+ * }
+ * handle($event->data); // branch on the body's own event type, where present
  * ```
  */
 final class DanipaWebhook

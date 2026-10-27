@@ -499,4 +499,111 @@ final class HttpClientTest extends TestCase
         $this->expectException(ValidationError::class);
         Sdk::http($fake)->request('POST', '/v1/x', []);
     }
+
+    // ---- retries resend the full body ------------------------------------
+
+    /**
+     * A PSR-18 transport that reads the body stream (as a real one does when
+     * it writes the request) without rewinding it, then replays a script.
+     *
+     * @param list<int|\Throwable> $script status codes or exceptions to return/throw in order
+     * @return array{0: \Psr\Http\Client\ClientInterface, 1: \ArrayObject<int, array{string, string}>}
+     */
+    private static function consumingTransport(array $script): array
+    {
+        /** @var \ArrayObject<int, array{string, string}> $seen */
+        $seen = new \ArrayObject();
+        $client = new class ($script, $seen) implements \Psr\Http\Client\ClientInterface {
+            /**
+             * @param list<int|\Throwable> $script
+             * @param \ArrayObject<int, array{string, string}> $seen
+             */
+            public function __construct(private array $script, private readonly \ArrayObject $seen)
+            {
+            }
+
+            public function sendRequest(RequestInterface $request): \Psr\Http\Message\ResponseInterface
+            {
+                $this->seen->append([$request->getBody()->getContents(), $request->getHeaderLine('Idempotency-Key')]);
+                $next = array_shift($this->script);
+                if ($next instanceof \Throwable) {
+                    throw $next;
+                }
+                return new \GuzzleHttp\Psr7\Response($next ?? 500, ['Content-Type' => 'application/json'], '{}');
+            }
+        };
+        return [$client, $seen];
+    }
+
+    /** @return iterable<string, array{list<int|\Throwable>}> */
+    public static function retriedFirstAttempts(): iterable
+    {
+        yield 'retryable status' => [[503, 201]];
+        yield 'network error' => [[new \Danipa\Sdk\Tests\Support\TransportException('connection reset'), 201]];
+    }
+
+    /** @param list<int|\Throwable> $script */
+    #[DataProvider('retriedFirstAttempts')]
+    public function testEveryRetrySendsTheFullBodyWithTheSameKey(array $script): void
+    {
+        [$client, $seen] = self::consumingTransport($script);
+        (new HttpClient(
+            apiKey: 'dk_test_secret',
+            baseUrl: Sdk::BASE,
+            client: $client,
+            sleeper: static fn (int $ms) => null,
+        ))->request('POST', '/v1/x', ['title' => 'Tea'], [], RequestOptions::withIdempotencyKey('k-retry'));
+
+        self::assertSame(
+            [['{"title":"Tea"}', 'k-retry'], ['{"title":"Tea"}', 'k-retry']],
+            $seen->getArrayCopy(),
+            'the retry must carry the same bytes and key as the first attempt',
+        );
+    }
+
+    // ---- explicit base URL validation --------------------------------------
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidBaseUrls(): iterable
+    {
+        yield 'query' => ['https://example.invalid/ms?tenant=x'];
+        yield 'empty query' => ['https://example.invalid/ms?'];
+        yield 'fragment' => ['https://example.invalid/ms#frag'];
+        yield 'user-info' => ['https://someone:hunter2@example.invalid/ms'];
+        yield 'no host' => ['https:///ms'];
+        yield 'bad port' => ['https://example.invalid:99999/ms'];
+        yield 'relative' => ['/ms'];
+        yield 'non-http scheme' => ['ftp://example.invalid/ms'];
+        yield 'space in host' => ['https://exa mple.invalid/ms'];
+    }
+
+    #[DataProvider('invalidBaseUrls')]
+    public function testExplicitBaseUrlMustBeAPlainAbsoluteHttpUrl(string $baseUrl): void
+    {
+        $fake = new FakeClient();
+        try {
+            new HttpClient(apiKey: 'dk_test_secret', baseUrl: $baseUrl, client: $fake);
+            self::fail('expected a ConfigurationError');
+        } catch (\Danipa\Sdk\Errors\ConfigurationError $e) {
+            self::assertStringNotContainsString('hunter2', $e->getMessage(), 'the message never echoes the URL');
+        }
+        self::assertSame([], $fake->sent());
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function validBaseUrls(): iterable
+    {
+        yield 'https with path' => ['https://gateway.example.com/ms', 'https://gateway.example.com/ms/v1/x'];
+        yield 'trailing slash' => ['https://gateway.example.com/ms/', 'https://gateway.example.com/ms/v1/x'];
+        yield 'plain http localhost' => ['http://localhost:8080/ms', 'http://localhost:8080/ms/v1/x'];
+        yield 'plain http loopback, no path' => ['http://127.0.0.1:4010', 'http://127.0.0.1:4010/v1/x'];
+    }
+
+    #[DataProvider('validBaseUrls')]
+    public function testValidExplicitBaseUrlIsUsed(string $baseUrl, string $expected): void
+    {
+        $fake = (new FakeClient())->reply(200, '{}');
+        (new HttpClient(apiKey: 'dk_test_secret', baseUrl: $baseUrl, client: $fake))->request('GET', '/v1/x');
+        self::assertSame($expected, (string) $fake->lastRequest()->getUri());
+    }
 }

@@ -4,6 +4,15 @@ Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [g
 
 ## Unreleased
 
+### Fixed
+
+- A retried request now sends the full JSON body on every attempt. Each attempt gets a fresh body stream built from the same encoded bytes, with the same `Idempotency-Key`. Before, a PSR-18 transport that consumed the body stream could send an empty body on the retry after a retryable status or a network error (Part of #7463).
+- `DanipaWebhook::constructEvent()` now rejects a body whose JSON root is an array, including `[]`, with `WebhookVerificationError` ("body is not a JSON object"). An empty object `{}` is still accepted. Signature verification is unchanged. Response bodies get the same root-type check (Part of #7463).
+
+### Changed
+
+- An explicit `baseUrl()` is now validated at construction, like the Java SDK: it must be an absolute `http://` or `https://` URL with a host, and must not contain a query, a fragment or user-info. Anything else throws `ConfigurationError` and nothing is sent. Plain `http` stays allowed for local and test servers. The default sandbox and live URLs are unaffected (Part of #7463).
+
 ## 0.4.0 — 2026-10-26
 
 ### Added

@@ -35,7 +35,9 @@ final class Json
     public static function decodeObject(string $json): array
     {
         $decoded = self::decode($json);
-        if (!\is_array($decoded) || ($decoded !== [] && array_is_list($decoded))) {
+        // Check the root type on the JSON text itself: once decoded to a PHP
+        // array, `{}` and `[]` look the same.
+        if (!\is_array($decoded) || !str_starts_with(ltrim($json, " \t\n\r"), '{')) {
             throw new MalformedResponse('expected a JSON object at the root of the response body');
         }
         /** @var array<string, mixed> $decoded */

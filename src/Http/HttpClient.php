@@ -105,6 +105,9 @@ final class HttpClient
         if ($baseUrl !== null && trim($baseUrl) === '') {
             throw new ConfigurationError('Danipa SDK: baseUrl must not be blank');
         }
+        if ($baseUrl !== null) {
+            self::assertValidBaseUrl($baseUrl);
+        }
         if ($baseUrl === null && Environment::fromApiKey($apiKey) === Environment::LIVE) {
             throw new ConfigurationError(self::PRODUCTION_NOT_LIVE_MESSAGE);
         }
@@ -128,6 +131,36 @@ final class HttpClient
     public static function inferBaseUrl(string $apiKey): string
     {
         return Environment::fromApiKey($apiKey)->baseUrl();
+    }
+
+    /**
+     * An explicit base URL must be an absolute http(s) URL with a valid host
+     * and no query, fragment or user-info; otherwise the resource path would
+     * land inside the query or fragment. Plain `http` stays allowed for local
+     * and test servers. Messages name the rule, never the URL (it may carry
+     * user-info).
+     *
+     * @throws ConfigurationError
+     */
+    private static function assertValidBaseUrl(string $baseUrl): void
+    {
+        if (str_contains($baseUrl, '?') || str_contains($baseUrl, '#')) {
+            throw new ConfigurationError('Danipa SDK: baseUrl must not contain a query (?…) or fragment (#…)');
+        }
+        $parts = preg_match('/[\x00-\x20\x7F]/', $baseUrl) === 1 ? false : parse_url($baseUrl);
+        $scheme = \is_array($parts) ? strtolower($parts['scheme'] ?? '') : '';
+        if (!\is_array($parts) || ($scheme !== 'http' && $scheme !== 'https')) {
+            throw new ConfigurationError(
+                'Danipa SDK: baseUrl must be an absolute http:// or https:// URL, e.g. https://api.sandbox.danipa.com/ms',
+            );
+        }
+        $host = $parts['host'] ?? '';
+        if (preg_match('/^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)$/', $host) !== 1) {
+            throw new ConfigurationError('Danipa SDK: baseUrl must include a host');
+        }
+        if (isset($parts['user']) || isset($parts['pass'])) {
+            throw new ConfigurationError('Danipa SDK: baseUrl must not contain user-info (user:password@)');
+        }
     }
 
     /**
@@ -157,12 +190,18 @@ final class HttpClient
         }
 
         $request = $this->buildRequest($method, $path, $body, $query, $idempotencyKey);
+        $json = $body !== null ? self::encodeBody($body) : null;
 
         // Every method reaching this point is retry-safe: reads are
         // idempotent by definition and every write carries a key.
         for ($attempt = 0;; $attempt++) {
+            // A fresh body stream per attempt: a transport may consume the
+            // stream it was given, so a reused one could go out empty.
+            $attemptRequest = $json !== null
+                ? $request->withBody($this->streamFactory->createStream($json))
+                : $request;
             try {
-                $response = $this->client->sendRequest($request);
+                $response = $this->client->sendRequest($attemptRequest);
             } catch (ClientExceptionInterface $e) {
                 // A RequestExceptionInterface means the request itself is
                 // unsendable — retrying cannot help.
@@ -213,18 +252,22 @@ final class HttpClient
             $request = $request->withHeader('Idempotency-Key', $idempotencyKey);
         }
         if ($body !== null) {
-            // A request body is always a JSON object; an empty PHP array would encode as `[]`.
-            $json = json_encode(
-                $body === [] ? new \stdClass() : $body,
-                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION,
-            );
-            $request = $request
-                ->withHeader('Content-Type', 'application/json')
-                ->withBody($this->streamFactory->createStream($json));
+            // The body stream itself is attached per attempt in request().
+            $request = $request->withHeader('Content-Type', 'application/json');
         }
         // Never send Authorization: X-API-Key + Authorization is rejected by
         // the server with 403 AMBIGUOUS_CREDENTIALS.
         return $request->withoutHeader('Authorization');
+    }
+
+    /** @param array<string, mixed> $body */
+    private static function encodeBody(array $body): string
+    {
+        // A request body is always a JSON object; an empty PHP array would encode as `[]`.
+        return json_encode(
+            $body === [] ? new \stdClass() : $body,
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION,
+        );
     }
 
     /** @param array<string, scalar|null> $query */

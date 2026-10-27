@@ -198,6 +198,25 @@ final class DanipaWebhookTest extends TestCase
         DanipaWebhook::constructEvent(self::PAYLOAD, self::headers('sha256=' . str_repeat('0', 64)), self::SECRET, now: self::NOW);
     }
 
+    public function testConstructEventRejectsASignedJsonArrayRoot(): void
+    {
+        foreach (['[]', '[1,2]'] as $payload) {
+            try {
+                DanipaWebhook::constructEvent($payload, self::headers(self::sig($payload)), self::SECRET, now: self::NOW);
+                self::fail('a JSON array root must be rejected: ' . $payload);
+            } catch (WebhookVerificationError $e) {
+                self::assertSame('Danipa webhook: body is not a JSON object', $e->getMessage());
+            }
+        }
+    }
+
+    public function testConstructEventAcceptsASignedEmptyObject(): void
+    {
+        $event = DanipaWebhook::constructEvent('{}', self::headers(self::sig('{}')), self::SECRET, now: self::NOW);
+        self::assertSame([], $event->data);
+        self::assertSame('{}', $event->payload);
+    }
+
     public function testConstructEventRejectsAStaleDelivery(): void
     {
         $this->expectException(WebhookVerificationError::class);

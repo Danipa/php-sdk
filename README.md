@@ -12,8 +12,9 @@ composer require danipa/sdk guzzlehttp/guzzle
 
 Requires **PHP 8.2+**. The SDK talks through any [PSR-18](https://www.php-fig.org/psr/psr-18/) HTTP client and
 [PSR-17](https://www.php-fig.org/psr/psr-17/) factories. It does not ship one: install Guzzle (as above), Symfony
-HttpClient + `nyholm/psr7`, or any other implementation, and the SDK finds it through
-[`php-http/discovery`](https://docs.php-http.org/en/latest/discovery.html). You can also inject one yourself, see
+HttpClient + `nyholm/psr7`, or any other implementation. With no client injected, the SDK uses Guzzle when it is
+installed, else Symfony HttpClient with redirects turned off, else whatever
+[`php-http/discovery`](https://docs.php-http.org/en/latest/discovery.html) finds. You can also inject one yourself, see
 [HTTP transport and timeouts](#http-transport-and-timeouts).
 
 > **Source of truth:** this package is developed in the `Danipa/danipa-digital-platform` monorepo (private) and published
@@ -270,6 +271,12 @@ $danipa = Danipa::builder()
 
 - `transport()` takes any PSR-18 client. `requestFactory()` and `streamFactory()` take PSR-17 factories. Whatever you
   inject is used as-is, and whatever you leave out is discovered.
+- **The transport must not follow redirects.** A client that follows a redirect resends the `X-API-Key` header to
+  the redirect target, possibly on another host. Guzzle's PSR-18 `sendRequest()` never follows redirects. Symfony
+  HttpClient follows them by default, so build it with redirects off:
+  `new \Symfony\Component\HttpClient\Psr18Client(\Symfony\Component\HttpClient\HttpClient::create(['max_redirects' => 0]))`.
+  For any other client, check its documentation. The SDK cannot see or change the redirect policy of a client you
+  inject. With redirects off, a 3xx response surfaces as `DanipaApiError`.
 - **Timeouts belong to the client.** The SDK cannot set a timeout on an arbitrary PSR-18 client, so configure it where
   you build the client, as above. A timed-out call surfaces as `TimeoutError`.
 - The SDK sends `User-Agent: danipa-php/<installed version> php/<PHP version>`. The version is read from Composer's

@@ -39,8 +39,10 @@ use Psr\Http\Message\StreamFactoryInterface;
  * mapping. Consumers go through {@see \Danipa\Sdk\Danipa}.
  *
  * Transport: any PSR-18 client + PSR-17 factories. Injected instances are
- * used as-is; otherwise they are discovered with `php-http/discovery`. The
- * SDK sets no timeout of its own — configure timeouts on the client you inject.
+ * used as-is. Otherwise the SDK picks a client that does not follow
+ * redirects ({@see defaultTransport()}) and discovers the factories with
+ * `php-http/discovery`. The SDK sets no timeout of its own — configure
+ * timeouts on the client you inject.
  *
  * @internal
  */
@@ -112,7 +114,7 @@ final class HttpClient
             throw new ConfigurationError(self::PRODUCTION_NOT_LIVE_MESSAGE);
         }
         $this->baseUrl = rtrim($baseUrl ?? self::inferBaseUrl($apiKey), '/');
-        $this->client = $client ?? Psr18ClientDiscovery::find();
+        $this->client = $client ?? self::defaultTransport();
         $this->requestFactory = $requestFactory ?? Psr17FactoryDiscovery::findRequestFactory();
         $this->streamFactory = $streamFactory ?? Psr17FactoryDiscovery::findStreamFactory();
         $this->sleeper = $sleeper ?? static function (int $ms): void {
@@ -120,6 +122,35 @@ final class HttpClient
         };
         $this->random = $random ?? static fn (int $max): int => $max <= 0 ? 0 : random_int(0, $max);
         $this->keyGenerator = $keyGenerator ?? self::uuid4(...);
+    }
+
+    /**
+     * The PSR-18 client used when none is injected. It must never follow a
+     * redirect, or the `X-API-Key` header would be resent to the redirect
+     * target. Guzzle's `sendRequest()` never follows; Symfony's client follows
+     * by default, so it is built with `max_redirects: 0`. Plain discovery
+     * would pick Symfony with its defaults even when Guzzle is installed, so
+     * discovery is only the fallback for other clients, whose redirect policy
+     * the SDK cannot see.
+     *
+     * @internal
+     * @param (\Closure(class-string): bool)|null $classExists Test seam; defaults to `class_exists()`.
+     */
+    public static function defaultTransport(?\Closure $classExists = null): ClientInterface
+    {
+        $classExists ??= static fn (string $class): bool => class_exists($class);
+        if ($classExists(\GuzzleHttp\Client::class)) {
+            return new \GuzzleHttp\Client();
+        }
+        if (
+            $classExists(\Symfony\Component\HttpClient\Psr18Client::class)
+            && $classExists(\Symfony\Component\HttpClient\HttpClient::class)
+        ) {
+            return new \Symfony\Component\HttpClient\Psr18Client(
+                \Symfony\Component\HttpClient\HttpClient::create(['max_redirects' => 0]),
+            );
+        }
+        return Psr18ClientDiscovery::find();
     }
 
     /**

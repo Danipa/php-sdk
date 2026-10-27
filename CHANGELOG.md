@@ -4,6 +4,12 @@ Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [g
 
 ## Unreleased
 
+### Security
+
+- With no transport injected, the SDK now picks a PSR-18 client that does not follow redirects: Guzzle when it is installed, else Symfony HttpClient built with `max_redirects: 0`, else `php-http/discovery` as before. Before, discovery could pick Symfony HttpClient with its default settings, even when Guzzle was installed. That client follows redirects and resent the `X-API-Key` header to the redirect target. A 3xx response now surfaces as `DanipaApiError` (#7744).
+- The README now says an injected transport must not follow redirects, with a Symfony example. The SDK cannot change the redirect policy of a client you inject (#7744).
+- `composer.json` now declares a conflict with `guzzlehttp/guzzle` below 7. Guzzle 6 is not a PSR-18 client, so it could not serve as the default transport (#7744).
+
 ### Fixed
 
 - A retried request now sends the full JSON body on every attempt. Each attempt gets a fresh body stream built from the same encoded bytes, with the same `Idempotency-Key`. Before, a PSR-18 transport that consumed the body stream could send an empty body on the retry after a retryable status or a network error (Part of #7463).

@@ -4,6 +4,8 @@ Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [g
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-27
+
 ### Security
 
 - With no transport injected, the SDK now picks a PSR-18 client that does not follow redirects: Guzzle when it is installed, else Symfony HttpClient built with `max_redirects: 0`, else `php-http/discovery` as before. Before, discovery could pick Symfony HttpClient with its default settings, even when Guzzle was installed. That client follows redirects and resent the `X-API-Key` header to the redirect target. A 3xx response now surfaces as `DanipaApiError` (#7744).

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Danipa\Sdk\Tests;
 
+use Danipa\Sdk\Errors\ConfigurationError;
 use Danipa\Sdk\Errors\DanipaApiError;
 use Danipa\Sdk\Http\HttpClient;
 use PHPUnit\Framework\TestCase;
@@ -44,6 +45,57 @@ final class DefaultTransportTest extends TestCase
             http_response_code(302);
             header('Location: http://127.0.0.1:%d/different-origin');
             PHP, $otherPort));
+        // #7845: an install with neither Guzzle nor Symfony, where discovery
+        // would find a client that follows redirects. The SDK's real
+        // constructor runs in a child process whose autoloader hides both, so
+        // no test seam is involved.
+        file_put_contents(self::$dir . '/no-known-client.php', <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            $loader = require $argv[1];
+            $loader->unregister();
+            spl_autoload_register(static function (string $class) use ($loader): void {
+                if ($class === 'GuzzleHttp\\Client' || str_starts_with($class, 'Symfony\\Component\\HttpClient\\')) {
+                    return;
+                }
+                if ($file = $loader->findFile($class)) {
+                    require $file;
+                }
+            });
+            final class FollowingClient implements Psr\Http\Client\ClientInterface
+            {
+                public function sendRequest(
+                    Psr\Http\Message\RequestInterface $request,
+                ): Psr\Http\Message\ResponseInterface {
+                    // PHP's http:// stream wrapper follows redirects and keeps the header.
+                    $context = stream_context_create(['http' => [
+                        'header' => 'X-API-Key: ' . $request->getHeaderLine('X-API-Key'),
+                        'ignore_errors' => true,
+                    ]]);
+                    $body = (string) file_get_contents((string) $request->getUri(), false, $context);
+                    return new GuzzleHttp\Psr7\Response(200, [], $body);
+                }
+            }
+            final class FollowingStrategy implements Http\Discovery\Strategy\DiscoveryStrategy
+            {
+                public static function getCandidates($type): array
+                {
+                    return $type === Psr\Http\Client\ClientInterface::class
+                        ? [['class' => FollowingClient::class, 'condition' => true]]
+                        : [];
+                }
+            }
+            Http\Discovery\Psr18ClientDiscovery::setStrategies([FollowingStrategy::class]);
+            $factory = new GuzzleHttp\Psr7\HttpFactory();
+            try {
+                $http = new Danipa\Sdk\Http\HttpClient($argv[2], $argv[3], 0, null, $factory, $factory);
+            } catch (Danipa\Sdk\Errors\ConfigurationError $e) {
+                echo 'REFUSED ', $e->getMessage();
+                exit(0);
+            }
+            $http->request('GET', '/v1/merchants/me');
+            echo 'SENT';
+            PHP);
         self::start($otherPort, 'other.php');
         $apiPort = self::freePort();
         self::start($apiPort, 'api.php');
@@ -96,14 +148,28 @@ final class DefaultTransportTest extends TestCase
         self::assertInstanceOf(\GuzzleHttp\Client::class, HttpClient::defaultTransport());
     }
 
-    public function testOtherClientsFallBackToDiscovery(): void
+    public function testWithNeitherGuzzleNorSymfonyTheConstructorRefusesAndSendsNothing(): void
+    {
+        $output = (string) shell_exec(implode(' ', array_map('escapeshellarg', [
+            PHP_BINARY,
+            self::$dir . '/no-known-client.php',
+            dirname(__DIR__) . '/vendor/autoload.php',
+            self::API_KEY,
+            self::$apiOrigin . '/ms',
+        ])) . ' 2>&1');
+
+        $seen = @file_get_contents(self::$dir . '/seen.log');
+        self::assertSame('', $seen === false ? '' : $seen, 'the redirect target must receive nothing');
+        self::assertStringStartsWith('REFUSED ', $output);
+        self::assertStringContainsString('->transport(', $output);
+    }
+
+    public function testWithNeitherGuzzleNorSymfonyNoClientIsDiscovered(): void
     {
         $neither = static fn (string $class): bool =>
             !str_starts_with($class, 'GuzzleHttp\\') && !str_starts_with($class, 'Symfony\\');
-        self::assertSame(
-            \Http\Discovery\Psr18ClientDiscovery::find()::class,
-            HttpClient::defaultTransport($neither)::class,
-        );
+        $this->expectException(ConfigurationError::class);
+        HttpClient::defaultTransport($neither);
     }
 
     private function assertRedirectIsNotFollowed(HttpClient $http): void

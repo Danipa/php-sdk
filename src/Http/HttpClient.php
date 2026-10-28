@@ -24,7 +24,6 @@ use Danipa\Sdk\Environment;
 use Danipa\Sdk\RequestOptions;
 use Danipa\Sdk\ResponseMeta;
 use Http\Discovery\Psr17FactoryDiscovery;
-use Http\Discovery\Psr18ClientDiscovery;
 use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Client\RequestExceptionInterface;
@@ -62,6 +61,14 @@ final class HttpClient
      */
     public const PRODUCTION_NOT_LIVE_MESSAGE = 'Danipa SDK: production is not live yet — use a dk_test_ key against '
         . 'sandbox. (To reach a live host anyway, pass an explicit baseUrl().)';
+
+    /**
+     * The {@see ConfigurationError} raised when no client is injected and
+     * neither Guzzle nor Symfony HttpClient is installed (#7845).
+     */
+    public const NO_SAFE_TRANSPORT_MESSAGE = 'Danipa SDK: no HTTP client that is known not to follow redirects is '
+        . 'installed. Install guzzlehttp/guzzle or symfony/http-client, or inject a PSR-18 client that does not '
+        . 'follow redirects with ->transport($client).';
 
     private const RETRYABLE_STATUSES = [408, 429, 502, 503, 504];
     private const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
@@ -128,13 +135,14 @@ final class HttpClient
      * The PSR-18 client used when none is injected. It must never follow a
      * redirect, or the `X-API-Key` header would be resent to the redirect
      * target. Guzzle's `sendRequest()` never follows; Symfony's client follows
-     * by default, so it is built with `max_redirects: 0`. Plain discovery
-     * would pick Symfony with its defaults even when Guzzle is installed, so
-     * discovery is only the fallback for other clients, whose redirect policy
-     * the SDK cannot see.
+     * by default, so it is built with `max_redirects: 0`. Any other client is
+     * never picked automatically, because the SDK cannot see its redirect
+     * policy: with neither installed this throws, and the caller injects a
+     * client that does not follow redirects (#7845).
      *
      * @internal
      * @param (\Closure(class-string): bool)|null $classExists Test seam; defaults to `class_exists()`.
+     * @throws ConfigurationError
      */
     public static function defaultTransport(?\Closure $classExists = null): ClientInterface
     {
@@ -150,7 +158,7 @@ final class HttpClient
                 \Symfony\Component\HttpClient\HttpClient::create(['max_redirects' => 0]),
             );
         }
-        return Psr18ClientDiscovery::find();
+        throw new ConfigurationError(self::NO_SAFE_TRANSPORT_MESSAGE);
     }
 
     /**

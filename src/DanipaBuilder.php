@@ -13,9 +13,10 @@ use Psr\Http\Message\StreamFactoryInterface;
  * Fluent builder for {@see Danipa}. See {@see Danipa::builder()}.
  *
  * Transport: pass any PSR-18 client with {@see transport()} (and optionally
- * PSR-17 factories). Anything not injected is discovered with
- * `php-http/discovery` — install e.g. `guzzlehttp/guzzle` or
- * `symfony/http-client` + `nyholm/psr7`.
+ * PSR-17 factories). Without one, the SDK uses Guzzle, else Symfony
+ * HttpClient with redirects off, else {@see build()} throws
+ * `ConfigurationError`. Factories not injected are discovered with
+ * `php-http/discovery`.
  *
  * Timeouts belong to the client: the SDK cannot set a timeout on an
  * arbitrary PSR-18 client, so configure it where you construct the client

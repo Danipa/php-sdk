@@ -4,6 +4,13 @@ Package: [`danipa/sdk`](https://packagist.org/packages/danipa/sdk) · Source: [g
 
 ## Unreleased
 
+## 0.4.2 — 2026-10-28
+
+### Security
+
+- With no transport injected and neither Guzzle nor Symfony HttpClient installed, the SDK now throws `ConfigurationError` at construction. Before, it used whatever PSR-18 client `php-http/discovery` found. If that client followed redirects, it resent the `X-API-Key` header to the redirect target. Inject a client that does not follow redirects with `->transport($client)`. Installs with Guzzle or Symfony HttpClient are unchanged (#7845).
+- **Upgrade note:** if your only PSR-18 client is another library that discovery used to find (e.g. Buzz or `php-http/curl-client`), `build()` now fails until you pass that client, configured not to follow redirects, with `->transport($client)` (#7845).
+
 ## 0.4.1 — 2026-10-27
 
 ### Security

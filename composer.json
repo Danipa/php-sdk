@@ -33,7 +33,7 @@
         "guzzlehttp/guzzle": "<7"
     },
     "suggest": {
-        "guzzlehttp/guzzle": "A PSR-18 client + PSR-17 factories; used by default when installed. Symfony HttpClient is used (with redirects off) when Guzzle is absent; any other PSR-18 client works if it does not follow redirects."
+        "guzzlehttp/guzzle": "A PSR-18 client + PSR-17 factories; used by default when installed. Symfony HttpClient is used (with redirects off) when Guzzle is absent. Any other PSR-18 client must be injected and must not follow redirects."
     },
     "autoload": {
         "psr-4": {
